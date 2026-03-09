@@ -18,9 +18,11 @@
 | `download_images.py` | 이미지 다운로드 (`ImageFailedLog` 클래스로 실패 이력 관리) |
 | `download_md.py` | HTML → MD 변환·저장 |
 | `download_html.py` | 원문 HTML 저장 |
-| `run_all.py` | 마스터 실행 스크립트 (실행 전 `all_posts.txt` 자동 갱신 포함) |
-| `build_posts_list.py` | 사이트맵 파싱 → `loh_blog/all_posts.txt` 생성 |
-| `loh_blog/all_posts.txt` | 포스트 URL+날짜 (`URL\tYYYY-MM-DD`, 날짜 **내림차순**) |
+| `run_all.py` | 마스터 실행 스크립트 (실행 전 `all_links.txt` 자동 갱신 포함) |
+| `build_posts_list.py` | 사이트맵 파싱 → `loh_blog/all_posts.txt` / `all_pages.txt` / `all_links.txt` 생성 |
+| `loh_blog/all_posts.txt` | sitemap-posts.xml URL+날짜 (`URL\tYYYY-MM-DD`, 날짜 **내림차순**) |
+| `loh_blog/all_pages.txt` | sitemap-pages.xml URL+날짜 (`URL\tYYYY-MM-DD`, 날짜 **내림차순**) |
+| `loh_blog/all_links.txt` | `all_posts.txt` + `all_pages.txt` 병합·중복 제거 목록 (기본 소스) |
 | `loh_blog/custom_posts.txt` | 수동 작성 URL 목록. `all_posts.txt`와 동일한 포맷. `--custom` 옵션 사용 시 소스로 읽힘 |
 | `requirements.txt` | `requests`, `beautifulsoup4`, `lxml` |
 
@@ -33,22 +35,26 @@
 ```bash
 pip install requests beautifulsoup4 lxml
 
-python3 run_all.py                      # images + md + html 전체 (all_posts.txt 자동 갱신)
+python3 run_all.py                      # images + md + html 전체 (all_links.txt 자동 갱신)
 python3 run_all.py --images             # 이미지만
 python3 run_all.py --md                 # MD만
 python3 run_all.py --html               # HTML만
 python3 run_all.py --retry              # 실패 목록 재처리
-python3 run_all.py --sample 10          # 랜덤 10개 테스트 (all_posts.txt 행 수의 10% 상한)
+python3 run_all.py --sample 10          # 랜덤 10개 테스트 (all_links.txt 행 수의 10% 상한)
 python3 run_all.py --sample 10 --retry  # 실패 목록에서 10개
+python3 run_all.py --posts              # all_posts.txt 소스 사용 (사이트맵 갱신 건너뜀)
+python3 run_all.py --posts --md         # all_posts.txt 대상 MD만
+python3 run_all.py --pages              # all_pages.txt 소스 사용 (사이트맵 갱신 건너뜀)
+python3 run_all.py --pages --images     # all_pages.txt 대상 이미지만
 python3 run_all.py --custom             # custom_posts.txt 소스 사용 (사이트맵 갱신 건너뜀)
 python3 run_all.py --custom --md        # custom_posts.txt 대상 MD만
 
-python3 build_posts_list.py             # all_posts.txt 수동 재생성
+python3 build_posts_list.py             # all_posts.txt / all_pages.txt / all_links.txt 수동 재생성
 ```
 
 파이프라인 실행 순서: `images → md → html` 고정.
 
-**옵션 제약**: `--custom`과 `--sample`은 동시에 사용할 수 없다.
+**옵션 제약**: `--posts`, `--pages`, `--custom`은 상호 배타적이며 동시에 사용할 수 없다. 세 플래그 모두 `--sample`과 동시에 사용할 수 없다.
 
 ---
 
@@ -56,7 +62,9 @@ python3 build_posts_list.py             # all_posts.txt 수동 재생성
 
 ```
 ./loh_blog/
-  all_posts.txt              ← 포스트 URL+날짜 목록 (날짜 내림차순)
+  all_posts.txt              ← sitemap-posts.xml URL+날짜 목록 (날짜 내림차순)
+  all_pages.txt              ← sitemap-pages.xml URL+날짜 목록 (날짜 내림차순)
+  all_links.txt              ← all_posts.txt + all_pages.txt 병합·중복 제거 (기본 소스)
   custom_posts.txt           ← 수동 작성 URL 목록 (--custom 옵션 소스)
   images/YYYY/MM/            ← 본문 이미지 (날짜별 폴더)
   images/thumbnails/         ← og:image 썸네일
@@ -125,7 +133,7 @@ MD 파일 내 이미지 참조는 MD 파일 위치 기준 상대경로. `img_pre
 | `load_image_map(filepath)` | `image_map.tsv` → `{clean_url: 상대경로}` |
 | `load_done_file(filepath)` | `done_*.txt` → `{slug: post_url}` |
 | `load_failed_post_urls(filepath)` | 실패 목록 첫 번째 컬럼 → `set[str]` |
-| `load_posts(filepath)` | `all_posts.txt` / `custom_posts.txt` → `[(url, date), ...]` |
+| `load_posts(filepath)` | `all_links.txt` / `all_posts.txt` 등 → `[(url, date), ...]` |
 | `append_line(filepath, line)` | 줄 추가. 스레드 안전, 부모 디렉토리 자동 생성 |
 | `filter_file_lines(filepath, keep_fn)` | `keep_fn(line) → bool` 기반 in-place 필터링. 스레드 안전 |
 | `remove_lines_by_prefix(filepath, prefix)` | `filter_file_lines`에 위임 |
@@ -180,17 +188,36 @@ def run_pipeline(
 
 ## build_posts_list.py
 
-`https://blog-ko.lordofheroes.com/sitemap-posts.xml`을 `xml.etree.ElementTree`로 파싱 (namespace 유무 모두 처리).
+### 사이트맵 URL
+
+| 상수 | URL |
+|------|-----|
+| `SITEMAP_URL` | `https://blog-ko.lordofheroes.com/sitemap-posts.xml` |
+| `SITEMAP_PAGES_URL` | `https://blog-ko.lordofheroes.com/sitemap-pages.xml` |
+
+두 사이트맵 모두 `xml.etree.ElementTree`로 파싱 (namespace 유무 모두 처리).
 `<lastmod>`에서 `YYYY-MM-DD` 추출. 없으면 빈 문자열로 맨 뒤 정렬.
-출력 파일: `ROOT_DIR(=loh_blog/) / all_posts.txt`. 날짜 **내림차순** 정렬.
 가장 오래된 포스트: 2020-07-27.
+
+### 출력 파일
+
+| 상수 | 파일 | 설명 |
+|------|------|------|
+| `OUTPUT_FILE` | `loh_blog/all_posts.txt` | sitemap-posts.xml 결과, 날짜 내림차순 |
+| `PAGES_OUTPUT_FILE` | `loh_blog/all_pages.txt` | sitemap-pages.xml 결과, 날짜 내림차순 |
+| `LINKS_OUTPUT_FILE` | `loh_blog/all_links.txt` | 두 파일 병합·중복 제거, 날짜 내림차순 |
 
 ### 공개 함수
 
 | 함수 | 설명 |
 |------|------|
-| `build_and_write() -> tuple[int, list[tuple[str, str]]]` | 사이트맵 파싱 후 `all_posts.txt` 전체 재작성. `(URL 수, entries 리스트)` 반환. `run_all.py`에서 import해 사용. |
-| `fetch_newest_sitemap_date() -> str` | 사이트맵에서 가장 최신 lastmod 날짜만 반환. 실패 시 `""`. |
+| `_build_sitemap_file(sitemap_url, output_file)` | 범용 단일 사이트맵 fetch → 정렬 → 파일 저장. `build_and_write` / `build_pages_and_write` 공통 내부 헬퍼. |
+| `build_and_write() -> tuple[int, list[tuple[str, str]]]` | sitemap-posts.xml → `all_posts.txt` 전체 재작성. `(URL 수, entries 리스트)` 반환. |
+| `build_pages_and_write() -> tuple[int, list[tuple[str, str]]]` | sitemap-pages.xml → `all_pages.txt` 전체 재작성. 시그니처·반환값은 `build_and_write()`와 동일. |
+| `build_links_and_write() -> int` | `all_posts.txt` + `all_pages.txt` 병합·중복 제거 → `all_links.txt` 재작성. posts 항목 우선(동일 URL 시 posts 날짜 사용). 저장된 항목 수 반환. |
+| `fetch_newest_sitemap_date() -> str` | posts + pages 두 사이트맵에서 가장 최신 lastmod 날짜를 반환. 둘 다 실패 시 `""`. |
+
+`main()`은 `build_and_write()` → `build_pages_and_write()` → `build_links_and_write()` 순서로 세 파일 모두 생성한다.
 
 ---
 
@@ -205,6 +232,7 @@ def run_pipeline(
 - `BLOG_HOST = "blog-ko.lordofheroes.com"`
 - `GDRIVE_HOSTS = {"drive.google.com", "docs.google.com", "lh3.googleusercontent.com"}`
 - `COMMUNITY_CDN_HOST = "community-ko-cdn.lordofheroes.com"`
+- `DL_KEYWORDS = {"다운로드", "download", "다운", "받기", "저장", "고화질 이미지", "고화질", "이미지", "원본"}`
 - `DONE_POSTS_FILE`: 이미지 수집 완료 포스트 URL 목록.
 
 ### 락 구조
@@ -234,7 +262,7 @@ class ImageFailedLog:
 | img src/data-src | `img` | `hostname == COMMUNITY_CDN_HOST and ext in IMG_EXTS` |
 | a href | `gdrive` | `hostname in GDRIVE_HOSTS` |
 | a href | `linked_direct` | `ext in IMG_EXTS` |
-| a href | `linked_keyword` | 앵커 텍스트에 다운로드 키워드 또는 해상도 패턴(`\d+[xX×]\d+`) |
+| a href | `linked_keyword` | 앵커 텍스트에 `DL_KEYWORDS` 키워드 또는 해상도 패턴(`\d+[xX×]\d+`) |
 
 content_tag 탐색 순서: `.gh-content` → `.post-content` → `article` → `main`.
 
@@ -261,6 +289,7 @@ content_tag 탐색 순서: `.gh-content` → `.post-content` → `article` → `
 - `--backfill-map`: 기존 다운로드 이력으로 `image_map.tsv` 재구성. thumbnails 폴더는 resolved path 비교로 제외.
 - 썸네일 해시 캐시: 시작 시 파일이 있으면 로드, 없으면 thumbnails 폴더 전체 스캔 후 생성 (최초 1회).
 - `image_map.tsv`에 썸네일(`og_image`) 경로는 기록하지 않는다. 썸네일은 hash 기반 중복 제거만 수행하며 URL-파일명 매핑이 없다.
+- 단독 실행 시 `--posts` 기본값은 `all_links.txt`.
 
 ---
 
@@ -317,6 +346,8 @@ fetch 후 Content-Type 검증(`text/html` 아니면 `unexpected_content_type:...
 ### 주요 상수
 
 - `POSTS_FILE = ROOT_DIR / "all_posts.txt"`
+- `PAGES_FILE = ROOT_DIR / "all_pages.txt"`
+- `LINKS_FILE = ROOT_DIR / "all_links.txt"`
 - `CUSTOM_POSTS_FILE = ROOT_DIR / "custom_posts.txt"`
 - `ROOT_DIR = Path(__file__).parent / "loh_blog"`
 - 실행 순서: `PIPELINE_ORDER = ("images", "md", "html")` 고정.
@@ -327,35 +358,39 @@ fetch 후 Content-Type 검증(`text/html` 아니면 `unexpected_content_type:...
 |------|------|
 | `--images` / `--md` / `--html` | 해당 단계만 실행. 미지정 시 전체 실행. |
 | `--retry` | 실패 목록 재처리. `--sample`과 조합 가능. |
-| `--custom` | `custom_posts.txt`를 소스로 사용. 사이트맵 자동 갱신 건너뜀. `--sample`과 **동시 사용 불가**. |
-| `--sample N` | 랜덤 N개 테스트. **`all_posts.txt` 행 수의 10%를 상한**으로 자동 클램핑. `--custom`과 동시 사용 불가. |
+| `--posts` | `all_posts.txt`를 소스로 사용. 사이트맵 자동 갱신 건너뜀. |
+| `--pages` | `all_pages.txt`를 소스로 사용. 사이트맵 자동 갱신 건너뜀. |
+| `--custom` | `custom_posts.txt`를 소스로 사용. 사이트맵 자동 갱신 건너뜀. |
+| `--sample N` | 랜덤 N개 테스트. **`all_links.txt` 행 수의 10%를 상한**으로 자동 클램핑. `--posts` / `--pages` / `--custom`과 동시 사용 불가. |
 | `--seed N` | `--sample` 샘플링 고정 시드. |
-| `--posts PATH` | 포스트 목록 파일 직접 지정. 사이트맵 갱신 건너뜀. |
+| *(미지정)* | `all_links.txt` 사용 (기본값). 사이트맵 freshness 체크 후 필요 시 갱신. |
+
+`--posts`, `--pages`, `--custom`은 상호 배타적. 둘 이상 동시 지정 시 `parser.error()`.
 
 ### 주요 헬퍼 함수
 
 | 함수 | 설명 |
 |------|------|
-| `_maybe_refresh_posts_list()` | `all_posts.txt` 자동 갱신. 로컬 최신 날짜와 사이트맵 최신 날짜를 비교해 불일치 시 `build_and_write()` 호출. `--custom` / `--posts` 사용 시 호출하지 않음. |
-| `_newest_local_date(posts_file)` | `all_posts.txt` 첫 번째 유효 날짜 읽기. 파일 부재·`OSError` 모두 `""` 반환. |
-| `_count_all_posts(posts_file)` | `all_posts.txt`의 유효 행 수(공백·`#` 제외) 반환. `--sample` 상한 계산에 사용. 읽기 실패 시 `0`. |
+| `_maybe_refresh_posts_list()` | `all_links.txt` 자동 갱신. `fetch_newest_sitemap_date()`(posts + pages 양쪽)로 remote 날짜 취득, `all_links.txt` 첫 줄 날짜와 비교해 불일치 시 `build_and_write()` → `build_pages_and_write()` → `build_links_and_write()` 순서로 재빌드. pages 갱신 실패 시에도 기존 `all_pages.txt`를 활용해 links 생성 시도. |
+| `_newest_local_date(posts_file)` | 지정 파일의 첫 번째 유효 날짜 읽기. 파일 부재·`OSError` 모두 `""` 반환. |
+| `_count_all_posts(posts_file)` | 파일의 유효 행 수(공백·`#` 제외) 반환. `--sample` 상한 계산 시 `LINKS_FILE` 기준으로 호출. 읽기 실패 시 `0`. |
 | `_load_failed_posts_for_retry(selected)` | 선택된 단계의 실패 파일 union → `set[str]`. |
 | `_sample_posts(posts, n, seed)` | 랜덤 샘플링. |
 
-### all_posts.txt 자동 갱신 흐름
+### all_links.txt 자동 갱신 흐름
 
-1. `_newest_local_date(POSTS_FILE)`: `all_posts.txt` 첫 줄의 날짜(내림차순 최신) 읽기.
-2. `fetch_newest_sitemap_date()`: 사이트맵에서 최신 날짜 취득.
-3. 두 값이 일치하면 갱신 스킵. 불일치하거나 로컬 파일이 없으면 `build_and_write()`로 전체 재빌드.
+1. `_newest_local_date(LINKS_FILE)`: `all_links.txt` 첫 줄의 날짜(내림차순 최신) 읽기.
+2. `fetch_newest_sitemap_date()`: posts + pages 사이트맵 양쪽에서 최신 날짜 취득 (둘 중 최대값).
+3. 두 값이 일치하면 갱신 스킵. 불일치하거나 로컬 파일이 없으면 `build_and_write()` → `build_pages_and_write()` → `build_links_and_write()`로 전체 재빌드.
 
 ### --sample 상한 클램핑
 
 ```
-cap = max(1, all_posts.txt 유효 행 수 // 10)
+cap = max(1, all_links.txt 유효 행 수 // 10)
 args.sample = min(args.sample, cap)
 ```
 
-`all_posts.txt`가 없거나 읽기 실패 시 클램핑 없이 통과.
+`all_links.txt`가 없거나 읽기 실패 시 클램핑 없이 통과.
 
 ---
 

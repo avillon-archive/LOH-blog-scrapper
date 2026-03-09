@@ -36,7 +36,10 @@ IMAGE_MAP_FILE = ROOT_DIR / "image_map.tsv"
 THUMB_HASH_FILE = ROOT_DIR / "thumbnail_hashes.txt"  # 썸네일 SHA-256 해시 캐시
 
 IMG_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg"}
-DL_KEYWORDS = {"다운로드", "download", "다운", "받기", "저장"}
+DL_KEYWORDS = {
+    "다운로드", "download", "다운", "받기", "저장",
+    "고화질 이미지", "고화질", "이미지", "원본",
+}
 RESOLUTION_RE = re.compile(r"\d+\s*[xX×]\s*\d+")
 BLOG_HOST = "blog-ko.lordofheroes.com"
 GDRIVE_HOSTS = {"drive.google.com", "docs.google.com", "lh3.googleusercontent.com"}
@@ -990,7 +993,7 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Image downloader")
     parser.add_argument("--retry", action="store_true", help="Retry failed list")
-    parser.add_argument("--posts", default=str(ROOT_DIR / "all_posts.txt"), help="Posts list file")
+    parser.add_argument("--posts", default=str(ROOT_DIR / "all_links.txt"), help="Posts list file")
     parser.add_argument("--backfill-map", action="store_true", help="Backfill image_map.tsv")
     args = parser.parse_args()
 

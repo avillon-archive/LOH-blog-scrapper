@@ -10,6 +10,10 @@ Usage:
   python run_all.py --sample 10
   python run_all.py --sample 10 --seed 123
   python run_all.py --md --images --sample 10
+  python run_all.py --posts
+  python run_all.py --posts --images
+  python run_all.py --pages
+  python run_all.py --pages --md
   python run_all.py --custom
   python run_all.py --custom --images
 """
@@ -23,13 +27,20 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 from utils import ensure_utf8_console, load_failed_post_urls, load_posts
-from build_posts_list import build_and_write, fetch_newest_sitemap_date
+from build_posts_list import (
+    build_and_write,
+    build_pages_and_write,
+    build_links_and_write,
+    fetch_newest_sitemap_date,
+)
 from download_images import run_images
 from download_md import run_md
 from download_html import run_html
 
 ROOT_DIR = Path(__file__).parent / "loh_blog"
 POSTS_FILE = ROOT_DIR / "all_posts.txt"
+PAGES_FILE = ROOT_DIR / "all_pages.txt"
+LINKS_FILE = ROOT_DIR / "all_links.txt"
 CUSTOM_POSTS_FILE = ROOT_DIR / "custom_posts.txt"
 FAILED_IMAGES_FILE = ROOT_DIR / "failed_images.txt"
 FAILED_MD_FILE = ROOT_DIR / "failed_md.txt"
@@ -38,12 +49,12 @@ PIPELINE_ORDER = ("images", "md", "html")
 
 
 # ---------------------------------------------------------------------------
-# all_posts.txt 자동 갱신
+# all_links.txt 자동 갱신
 # ---------------------------------------------------------------------------
 
 
 def _newest_local_date(posts_file: Path) -> str:
-    """all_posts.txt의 첫 번째 유효 날짜(내림차순 최신)를 반환한다.
+    """파일의 첫 번째 유효 날짜(내림차순 최신)를 반환한다.
 
     파일이 없거나 읽기 실패 시 "" 반환.
     """
@@ -58,8 +69,8 @@ def _newest_local_date(posts_file: Path) -> str:
 
 
 def _maybe_refresh_posts_list() -> None:
-    """all_posts.txt가 없거나 사이트맵 최신 날짜와 불일치하면 재빌드한다."""
-    local_date = _newest_local_date(POSTS_FILE)
+    """all_links.txt가 없거나 사이트맵(posts + pages) 최신 날짜와 불일치하면 재빌드한다."""
+    local_date = _newest_local_date(LINKS_FILE)
 
     print("[포스트 목록] 사이트맵 최신 날짜 확인 중...")
     remote_date = fetch_newest_sitemap_date()
@@ -75,13 +86,30 @@ def _maybe_refresh_posts_list() -> None:
     if local_date:
         print(f"[포스트 목록] 갱신 필요 (로컬={local_date} → 사이트맵={remote_date})")
     else:
-        print(f"[포스트 목록] all_posts.txt 없음, 신규 생성 (사이트맵={remote_date})")
+        print(f"[포스트 목록] all_links.txt 없음, 신규 생성 (사이트맵={remote_date})")
 
+    # ── posts ──────────────────────────────────────────────────────────
     try:
-        count, _ = build_and_write()
-        print(f"[포스트 목록] 갱신 완료 ({count}개 URL, 최신={remote_date})")
+        count_posts, _ = build_and_write()
+        print(f"[포스트 목록] all_posts.txt 갱신 완료 ({count_posts}개 URL)")
     except Exception as e:
-        print(f"[포스트 목록] 갱신 실패: {e}")
+        print(f"[포스트 목록] all_posts.txt 갱신 실패: {e}")
+        return
+
+    # ── pages ──────────────────────────────────────────────────────────
+    try:
+        count_pages, _ = build_pages_and_write()
+        print(f"[포스트 목록] all_pages.txt 갱신 완료 ({count_pages}개 URL)")
+    except Exception as e:
+        print(f"[포스트 목록] all_pages.txt 갱신 실패: {e}")
+        # pages 실패해도 links 생성은 시도 (기존 all_pages.txt 있으면 활용 가능)
+
+    # ── links (merge) ──────────────────────────────────────────────────
+    try:
+        count_links = build_links_and_write()
+        print(f"[포스트 목록] all_links.txt 갱신 완료 ({count_links}개 URL, 최신={remote_date})")
+    except Exception as e:
+        print(f"[포스트 목록] all_links.txt 갱신 실패: {e}")
 
 
 def _load_failed_posts_for_retry(selected: set[str]) -> set[str]:
@@ -124,7 +152,7 @@ def _sample_source_label(selected: set[str]) -> str:
 
 
 def _count_all_posts(posts_file: Path) -> int:
-    """all_posts.txt의 유효 행 수(공백·# 주석 제외)를 반환한다.
+    """파일의 유효 행 수(공백·# 주석 제외)를 반환한다.
 
     파일이 없거나 읽기 실패 시 0 반환.
     """
@@ -151,25 +179,34 @@ def main():
     parser.add_argument("--html", action="store_true", help="HTML만 처리")
     parser.add_argument("--retry", action="store_true", help="실패 목록 재처리")
     parser.add_argument(
+        "--posts",
+        action="store_true",
+        help="all_posts.txt를 포스트 소스로 사용 (사이트맵 자동 갱신 건너뜀)",
+    )
+    parser.add_argument(
+        "--pages",
+        action="store_true",
+        help="all_pages.txt를 포스트 소스로 사용 (사이트맵 자동 갱신 건너뜀)",
+    )
+    parser.add_argument(
         "--custom",
         action="store_true",
-        help="custom_posts.txt를 포스트 소스로 사용 (all_posts.txt 자동 갱신 건너뜀)",
+        help="custom_posts.txt를 포스트 소스로 사용 (사이트맵 자동 갱신 건너뜀)",
     )
-    parser.add_argument("--sample", type=int, help="테스트용 랜덤 샘플 개수 (all_posts.txt 행 수의 10%% 상한 적용)")
+    parser.add_argument("--sample", type=int, help="테스트용 랜덤 샘플 개수 (all_links.txt 행 수의 10%% 상한 적용)")
     parser.add_argument("--seed", type=int, help="샘플링 고정 시드(선택)")
-    parser.add_argument(
-        "--posts",
-        default=None,
-        help="포스트 목록 파일 직접 지정 (기본: all_posts.txt, --custom 시: custom_posts.txt)",
-    )
     args = parser.parse_args()
 
     # ── 인수 유효성 검사 ────────────────────────────────────────────────
     if args.sample is not None and args.sample <= 0:
         parser.error("--sample must be a positive integer")
 
-    if args.custom and args.sample is not None:
-        parser.error("--custom과 --sample은 동시에 사용할 수 없습니다")
+    source_flags = [args.posts, args.pages, args.custom]
+    if sum(bool(f) for f in source_flags) > 1:
+        parser.error("--posts, --pages, --custom 은 동시에 사용할 수 없습니다")
+
+    if (args.posts or args.pages or args.custom) and args.sample is not None:
+        parser.error("--posts / --pages / --custom 과 --sample 은 동시에 사용할 수 없습니다")
 
     # ── 파이프라인 단계 결정 ────────────────────────────────────────────
     selected = {
@@ -185,25 +222,26 @@ def main():
         selected = set(PIPELINE_ORDER)
 
     # ── 포스트 소스 파일 결정 ───────────────────────────────────────────
-    if args.posts is not None:
-        # 직접 지정한 경우 그대로 사용
-        posts_file = Path(args.posts)
-        source_label = posts_file.name
+    if args.posts:
+        posts_file = POSTS_FILE
+        source_label = "all_posts.txt"
+        skip_refresh = True
+    elif args.pages:
+        posts_file = PAGES_FILE
+        source_label = "all_pages.txt"
         skip_refresh = True
     elif args.custom:
         posts_file = CUSTOM_POSTS_FILE
         source_label = "custom_posts.txt"
         skip_refresh = True
     else:
-        posts_file = POSTS_FILE
-        source_label = "all_posts.txt"
+        posts_file = LINKS_FILE
+        source_label = "all_links.txt"
         skip_refresh = False
 
-    # ── all_posts.txt 자동 갱신 ────────────────────────────────────────
+    # ── all_links.txt 자동 갱신 ────────────────────────────────────────
     if skip_refresh:
-        if args.custom:
-            print(f"[포스트 목록] {source_label} 사용, 사이트맵 갱신 건너뜀")
-        # --posts 직접 지정 시에도 갱신 불필요
+        print(f"[포스트 목록] {source_label} 사용, 사이트맵 갱신 건너뜀")
     else:
         _maybe_refresh_posts_list()
     print()
@@ -228,14 +266,14 @@ def main():
             return
 
     if args.sample is not None:
-        # all_posts.txt 행 수 기준 10% 상한 적용
-        all_count = _count_all_posts(POSTS_FILE)
+        # all_links.txt 행 수 기준 10% 상한 적용
+        all_count = _count_all_posts(LINKS_FILE)
         if all_count > 0:
             cap = max(1, all_count // 10)
             if args.sample > cap:
                 print(
                     f"[샘플] --sample {args.sample} → 상한 적용 → {cap}"
-                    f" (all_posts.txt {all_count}행의 10%)"
+                    f" (all_links.txt {all_count}행의 10%)"
                 )
                 args.sample = cap
 
