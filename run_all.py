@@ -52,7 +52,7 @@ def _newest_local_date(posts_file: Path) -> str:
             parts = line.strip().split("\t")
             if len(parts) == 2 and parts[1].strip():
                 return parts[1].strip()
-    except FileNotFoundError:
+    except OSError:
         pass
     return ""
 

@@ -271,13 +271,7 @@ class FailedLog:
         return entries
 
     def record(self, post_url: str, reason: str) -> None:
-        """실패 항목을 기록한다. 동일 (post_url, reason) 쌍은 중복 기록하지 않는다.
-
-        Note: lock 내부에서 캐시를 갱신하고 lock 외부에서 파일에 기록한다.
-        두 스레드가 고유한 항목을 동시에 통과할 경우 파일 기록 순서와
-        캐시 삽입 순서가 다를 수 있으나, append_line 내부의 _file_lock이
-        원자성을 보장하므로 누락은 발생하지 않는다.
-        """
+        """실패 항목을 기록한다. 동일 (post_url, reason) 쌍은 중복 기록하지 않는다."""
         key = (post_url, reason)
         with self._lock:
             if self._cache is None:

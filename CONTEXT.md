@@ -249,13 +249,15 @@ content_tag 탐색 순서: `.gh-content` → `.post-content` → `article` → `
 
 - `_wayback_oldest(url)`: CDX API `limit=1`. `_wayback_cache`에 캐시. 동일 URL 동시 요청 시 `_wayback_events`로 선착 스레드만 fetch, 나머지는 대기 후 캐시 사용.
 - `_add_im(url)`: `/web/{ts}/` → `/web/{ts}im_/`.
+- `_fetch_wayback_post_soup`: 파싱 전 `resp.encoding = resp.apparent_encoding or "utf-8"`로 인코딩 보정 (Wayback 래퍼 페이지의 부정확한 헤더 대응).
+- `_fetch_wayback_gdrive_from_post`: img 탐색 시 `src` 및 `data-src` 모두 확인. lazy-load 이미지가 Wayback 스냅샷에 `data-src`로만 남아있는 경우를 처리한다.
 - Wayback 포스트 스냅샷 탐색 함수들은 `_normalized_link_key` 완전 일치 비교.
 
 ### 기타
 
 - `save_image(content, filename, folder) -> str`: 충돌 시 `_2`, `_3` 번호 부여. 항상 유효한 파일명 반환.
 - `failed_images.txt` 형식: `post_url\timg_url\treason`. fetch_post_failed는 img_url 빈 문자열.
-- retry 모드: `fetch_post_failed`는 포스트 fetch 성공 시 제거. `download_failed`는 `fail==0 and ok>0` 시에만 제거.
+- retry 모드: `fetch_post_failed`는 포스트 fetch 성공 시 제거. `download_failed`는 `fail==0 and ok>0` 시에만 제거. retry 대상 0개이면 `run_pipeline`과 동일하게 메시지 출력 후 즉시 반환.
 - `--backfill-map`: 기존 다운로드 이력으로 `image_map.tsv` 재구성. thumbnails 폴더는 resolved path 비교로 제외.
 - 썸네일 해시 캐시: 시작 시 파일이 있으면 로드, 없으면 thumbnails 폴더 전체 스캔 후 생성 (최초 1회).
 - `image_map.tsv`에 썸네일(`og_image`) 경로는 기록하지 않는다. 썸네일은 hash 기반 중복 제거만 수행하며 URL-파일명 매핑이 없다.
@@ -335,6 +337,7 @@ fetch 후 Content-Type 검증(`text/html` 아니면 `unexpected_content_type:...
 | 함수 | 설명 |
 |------|------|
 | `_maybe_refresh_posts_list()` | `all_posts.txt` 자동 갱신. 로컬 최신 날짜와 사이트맵 최신 날짜를 비교해 불일치 시 `build_and_write()` 호출. `--custom` / `--posts` 사용 시 호출하지 않음. |
+| `_newest_local_date(posts_file)` | `all_posts.txt` 첫 번째 유효 날짜 읽기. 파일 부재·`OSError` 모두 `""` 반환. |
 | `_count_all_posts(posts_file)` | `all_posts.txt`의 유효 행 수(공백·`#` 제외) 반환. `--sample` 상한 계산에 사용. 읽기 실패 시 `0`. |
 | `_load_failed_posts_for_retry(selected)` | 선택된 단계의 실패 파일 union → `set[str]`. |
 | `_sample_posts(posts, n, seed)` | 랜덤 샘플링. |

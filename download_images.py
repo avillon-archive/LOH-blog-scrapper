@@ -553,6 +553,7 @@ def _fetch_wayback_post_soup(
             post_soup_cache[post_url] = None
         return None
 
+    resp.encoding = resp.apparent_encoding or "utf-8"
     parsed = (BeautifulSoup(resp.text, "lxml"), wayback_post)
     if post_soup_cache is not None:
         post_soup_cache[post_url] = parsed
@@ -574,7 +575,7 @@ def _fetch_wayback_gdrive_from_post(
     target_key = _normalized_link_key(original_img_url)
 
     for img_tag in soup.find_all("img"):
-        src = img_tag.get("src") or ""
+        src = img_tag.get("src") or img_tag.get("data-src") or ""
         if not src:
             continue
         candidate_url = urllib.parse.urljoin(wayback_post, src)
@@ -951,6 +952,9 @@ def run_images(posts: list[tuple[str, str]], retry_mode: bool = False):
         fail_posts = load_failed_post_urls(FAILED_FILE)
         posts = [(url, date) for url, date in posts if url in fail_posts]
         print(f"[이미지] 재처리 대상: {len(posts)}개 포스트")
+        if not posts:
+            print("[이미지] 재처리 대상이 없습니다.")
+            return
 
     total = len(posts)
     # 대상 수가 100개 이하면 10개 단위, 초과면 50개 단위로 진행도 출력
