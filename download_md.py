@@ -75,9 +75,11 @@ def img_to_md(
 ) -> str:
     """<img> 태그를 Markdown 이미지 링크로 변환한다.
 
-    - image_map에 URL이 있으면 로컬 경로 사용 (img_prefix + images/...)
+    - image_map에 URL이 있으면 img_prefix + 상대경로 사용
+      img_prefix는 process_post에서 target_dir depth 기준으로 자동 계산된다.
+        md/slug.md          → img_prefix="../"    → ../images/YYYY/MM/x.png
+        md/카테고리/slug.md → img_prefix="../../" → ../../images/YYYY/MM/x.png
     - 없으면 절대 URL로 폴백 (링크가 끊기지 않도록)
-    - img_prefix: MD 파일 위치에 따라 "../" 또는 "../../" 를 전달한다.
     """
     src = img_tag.get("src") or img_tag.get("data-src") or ""
     alt = img_tag.get("alt") or ""
@@ -91,10 +93,6 @@ def img_to_md(
     if not relative_path:
         return f"![{alt}]({abs_src})"
 
-    # image_map 값은 ROOT_DIR 기준 상대경로 (예: "images/2023/04/x.png")
-    # MD 파일 위치에 따라 img_prefix 를 앞에 붙인다.
-    #   md/slug.md           → img_prefix = "../"    → ../images/...
-    #   md/카테고리/slug.md  → img_prefix = "../../" → ../../images/...
     return f"![{alt}]({img_prefix}{relative_path})"
 
 
@@ -153,15 +151,24 @@ def _wrap_marker(inner: str, marker: str) -> str:
     CommonMark 규칙상 닫는 마커 직전에 공백이 있으면 강조로 인식되지 않는다.
     앞뒤 공백을 마커 바깥으로 이동시켜 이 문제를 해결한다.
 
-    예) inner = "텍스트 "
-        → lead="" trail=" " → "**텍스트** " (O)
+    whitespace-only인 경우 마커를 씌우지 않고 원문 공백을 그대로 반환한다.
+    (중첩 strong 평탄화 시 공백 소멸 방지)
     """
     stripped = inner.strip()
     if not stripped:
-        return ""
+        return inner  # 공백은 공백 그대로 보존
     lead = inner[: len(inner) - len(inner.lstrip())]
     trail = inner[len(inner.rstrip()):]
     return f"{lead}{marker}{stripped}{marker}{trail}"
+
+
+def _strip_marker(text: str, marker: str) -> str:
+    """text 안에 있는 동일 마커 래핑을 제거한다 (중첩 마커 평탄화용).
+
+    non-greedy 매칭으로 순차 제거하여 중첩된 모든 마커 쌍을 해소한다.
+    """
+    escaped = re.escape(marker)
+    return re.sub(rf'{escaped}(.+?){escaped}', r'\1', text, flags=re.DOTALL)
 
 
 def inline_to_md(
@@ -190,12 +197,15 @@ def inline_to_md(
         return img_to_md(elem, post_url, image_map, img_prefix=img_prefix)
     if name in ("strong", "b"):
         inner = _children_inline(elem, post_url, image_map, img_prefix=img_prefix, depth=depth)
+        inner = _strip_marker(inner, "**")
         return _wrap_marker(inner, "**")
     if name in ("em", "i"):
         inner = _children_inline(elem, post_url, image_map, img_prefix=img_prefix, depth=depth)
+        inner = _strip_marker(inner, "*")
         return _wrap_marker(inner, "*")
     if name in ("del", "s", "strike"):
         inner = _children_inline(elem, post_url, image_map, img_prefix=img_prefix, depth=depth)
+        inner = _strip_marker(inner, "~~")
         return _wrap_marker(inner, "~~")
     if name == "code":
         inner = elem.get_text()
@@ -510,16 +520,15 @@ def process_post(
 
     soup = BeautifulSoup(resp.text, "lxml")
 
-    # 카테고리 추출 → 저장 경로·이미지 상대경로 결정
+    # 카테고리 추출 → 저장 경로 결정
     category = extract_category(soup)
-    if category:
-        target_dir = MD_DIR / category
-        img_prefix = "../../"
-    else:
-        target_dir = MD_DIR
-        img_prefix = "../"
-
+    target_dir = MD_DIR / category if category else MD_DIR
     target_dir.mkdir(parents=True, exist_ok=True)
+
+    # target_dir의 ROOT_DIR 기준 depth로 img_prefix 자동 계산
+    # md/ (depth=1) → "../"  /  md/카테고리/ (depth=2) → "../../"
+    depth = len(target_dir.relative_to(ROOT_DIR).parts)
+    img_prefix = "../" * depth
 
     md_text = post_to_md(soup, post_url, post_date, image_map, category, img_prefix)
 

@@ -60,7 +60,7 @@ python3 build_posts_list.py             # all_posts.txt 수동 재생성
   html/카테고리명/            ← 카테고리별 원문 HTML
   downloaded_urls.txt        ← 이미지 URL 완료 이력 (main:/thumb: prefix)
   done_posts_images.txt      ← 이미지 완료 포스트 URL 목록
-  image_map.tsv              ← clean_url → images/... 상대경로
+  image_map.tsv              ← clean_url → images/... 상대경로 (ROOT_DIR 기준)
   thumbnail_hashes.txt       ← 썸네일 SHA-256 해시 캐시
   done_md.txt                ← MD 완료 이력 (slug\tpost_url)
   done_html.txt              ← HTML 완료 이력 (slug\tpost_url)
@@ -69,9 +69,14 @@ python3 build_posts_list.py             # all_posts.txt 수동 재생성
   failed_html.txt            ← HTML 실패 이력 (post_url\treason)
 ```
 
-MD 파일 내 이미지 참조:
-- 카테고리 없음 (`md/slug.md`): `![alt](../images/YYYY/MM/파일명.png)`
-- 카테고리 있음 (`md/카테고리명/slug.md`): `![alt](../../images/YYYY/MM/파일명.png)`
+MD 파일 내 이미지 참조는 MD 파일 위치 기준 상대경로. `img_prefix`는 `process_post`에서 `target_dir`의 ROOT_DIR 기준 depth로 자동 계산된다.
+
+| MD 파일 위치 | depth | img_prefix | 실제 경로 |
+|---|---|---|---|
+| `md/slug.md` | 1 | `../` | `../images/YYYY/MM/x.png` |
+| `md/카테고리/slug.md` | 2 | `../../` | `../../images/YYYY/MM/x.png` |
+
+`image_map.tsv`에 없는 이미지는 절대 URL로 폴백. 썸네일(`og_image`)은 `image_map.tsv`에 기록하지 않으며 URL-파일명 매핑이 없다.
 
 ---
 
@@ -246,6 +251,7 @@ content_tag 탐색 순서: `.gh-content` → `.post-content` → `article` → `
 - retry 모드: `fetch_post_failed`는 포스트 fetch 성공 시 제거. `download_failed`는 `fail==0 and ok>0` 시에만 제거.
 - `--backfill-map`: 기존 다운로드 이력으로 `image_map.tsv` 재구성. thumbnails 폴더는 resolved path 비교로 제외.
 - 썸네일 해시 캐시: 시작 시 파일이 있으면 로드, 없으면 thumbnails 폴더 전체 스캔 후 생성 (최초 1회).
+- `image_map.tsv`에 썸네일(`og_image`) 경로는 기록하지 않는다. 썸네일은 hash 기반 중복 제거만 수행하며 URL-파일명 매핑이 없다.
 
 ---
 
@@ -266,8 +272,9 @@ content_tag 탐색 순서: `.gh-content` → `.post-content` → `article` → `
 - **본문 탐색**: `section.post-content` → `div.post-content` → `article` → `main` 순.
 - **제거 태그**: `author-card`, `post-share`, `post-tags`, `post-nav`, `related-posts`, `comments`.
 - **제목 중복 방지**: body 내 h1 sweep 후 `title_tag.parent is not None` 체크로 header 범위 외 제목 별도 제거.
-- **`_wrap_marker(inner, marker)`**: `**`, `*`, `~~` 마커를 씌울 때 앞뒤 공백을 마커 바깥으로 이동. CommonMark 닫는 마커 직전 공백 문제 방지.
-- **`img_to_md(img_tag, post_url, image_map, img_prefix)`**: `image_map` 미등록 시 절대 URL 폴백. `img_prefix`는 `"../"` 또는 `"../../"`로 MD 파일 위치에 따라 결정. `post_to_md` → `convert_node` → `inline_to_md` → `_children_inline` → `img_to_md` 전 체인에 keyword 인자로 전달.
+- **`_wrap_marker(inner, marker)`**: `**`, `*`, `~~` 마커를 씌울 때 앞뒤 공백을 마커 바깥으로 이동. whitespace-only인 경우 마커 없이 원문 공백을 그대로 반환 (중첩 strong 평탄화 시 공백 소멸 방지).
+- **`_strip_marker(text, marker)`**: non-greedy 매칭으로 text 내 중첩된 동일 마커 래핑을 모두 제거. `strong/b`, `em/i`, `del/s/strike` 변환 시 `_children_inline` 결과에 적용 후 `_wrap_marker`를 씌운다. 원본 HTML에 잘못 중첩된 `<strong><strong>...</strong></strong>` 구조를 단일 `**...**`로 평탄화한다.
+- **`img_to_md(img_tag, post_url, image_map, img_prefix)`**: `image_map` 등록 시 `img_prefix + 상대경로` 형태로 참조. `img_prefix`는 `process_post`에서 `target_dir.relative_to(ROOT_DIR).parts`의 depth로 자동 계산 (`md/` → `"../"`, `md/카테고리/` → `"../../"`). 미등록 시 절대 URL 폴백.
 - `INLINE_MAX_DEPTH = 60`: 비정상 중첩 HTML 안전장치.
 - `collapse_blank_lines`: 연속 빈 줄 최대 1개.
 - `_convert_table`: `<thead>` 없이 `<tbody>`만 있을 때 첫 tr을 헤더로 사용하며 body_rows 중복 방지.
