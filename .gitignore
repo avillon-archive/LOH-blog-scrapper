@@ -1,0 +1,7 @@
+loh_blog/
+__pycache__/
+*.pyc
+*.pyo
+.env
+*.txt
+!requirements.txt
