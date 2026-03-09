@@ -125,8 +125,6 @@ class ImageFailedLog:
                 self._cache = {e for e in self._cache if not (e[0] == post_url and e[2] == reason)}
 
     def load_post_urls(self) -> set[str]:
-        """실패 목록의 post_url 집합을 반환한다."""
-        from utils import load_failed_post_urls
         return load_failed_post_urls(self._filepath)
 
 
@@ -955,6 +953,8 @@ def run_images(posts: list[tuple[str, str]], retry_mode: bool = False):
         print(f"[이미지] 재처리 대상: {len(posts)}개 포스트")
 
     total = len(posts)
+    # 대상 수가 100개 이하면 10개 단위, 초과면 50개 단위로 진행도 출력
+    report_interval = 10 if total <= 100 else 50
     start = time.time()
     total_ok = 0
     total_fail = 0
@@ -985,7 +985,7 @@ def run_images(posts: list[tuple[str, str]], retry_mode: bool = False):
                 if result.fail == 0 and result.ok > 0:
                     remove_from_failed(post_url, reason="download_failed")
 
-            if cur_completed % 50 == 0 or cur_completed == total:
+            if cur_completed % report_interval == 0 or cur_completed == total:
                 print(f"  {eta_str(cur_completed, total, start)} 성공={total_ok} 실패={total_fail}")
 
     print(f"\n[이미지 완료] 성공={total_ok}, 실패={total_fail}")

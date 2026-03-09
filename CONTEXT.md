@@ -21,6 +21,7 @@
 | `run_all.py` | 마스터 실행 스크립트 (실행 전 `all_posts.txt` 자동 갱신 포함) |
 | `build_posts_list.py` | 사이트맵 파싱 → `loh_blog/all_posts.txt` 생성 |
 | `loh_blog/all_posts.txt` | 포스트 URL+날짜 (`URL\tYYYY-MM-DD`, 날짜 **내림차순**) |
+| `loh_blog/custom_posts.txt` | 수동 작성 URL 목록. `all_posts.txt`와 동일한 포맷. `--custom` 옵션 사용 시 소스로 읽힘 |
 | `requirements.txt` | `requests`, `beautifulsoup4`, `lxml` |
 
 > **모듈 독립성**: `download_html.py`와 `download_md.py`는 서로 의존하지 않는다. `url_to_slug`는 `utils.py`에 정의되어 있으며 두 모듈이 공통 import한다.
@@ -37,13 +38,17 @@ python3 run_all.py --images             # 이미지만
 python3 run_all.py --md                 # MD만
 python3 run_all.py --html               # HTML만
 python3 run_all.py --retry              # 실패 목록 재처리
-python3 run_all.py --sample 10          # 랜덤 10개 테스트
+python3 run_all.py --sample 10          # 랜덤 10개 테스트 (all_posts.txt 행 수의 10% 상한)
 python3 run_all.py --sample 10 --retry  # 실패 목록에서 10개
+python3 run_all.py --custom             # custom_posts.txt 소스 사용 (사이트맵 갱신 건너뜀)
+python3 run_all.py --custom --md        # custom_posts.txt 대상 MD만
 
 python3 build_posts_list.py             # all_posts.txt 수동 재생성
 ```
 
 파이프라인 실행 순서: `images → md → html` 고정.
+
+**옵션 제약**: `--custom`과 `--sample`은 동시에 사용할 수 없다.
 
 ---
 
@@ -52,6 +57,7 @@ python3 build_posts_list.py             # all_posts.txt 수동 재생성
 ```
 ./loh_blog/
   all_posts.txt              ← 포스트 URL+날짜 목록 (날짜 내림차순)
+  custom_posts.txt           ← 수동 작성 URL 목록 (--custom 옵션 소스)
   images/YYYY/MM/            ← 본문 이미지 (날짜별 폴더)
   images/thumbnails/         ← og:image 썸네일
   md/                        ← 카테고리 없는 MD 파일
@@ -119,11 +125,11 @@ MD 파일 내 이미지 참조는 MD 파일 위치 기준 상대경로. `img_pre
 | `load_image_map(filepath)` | `image_map.tsv` → `{clean_url: 상대경로}` |
 | `load_done_file(filepath)` | `done_*.txt` → `{slug: post_url}` |
 | `load_failed_post_urls(filepath)` | 실패 목록 첫 번째 컬럼 → `set[str]` |
-| `load_posts(filepath)` | `all_posts.txt` → `[(url, date), ...]` |
+| `load_posts(filepath)` | `all_posts.txt` / `custom_posts.txt` → `[(url, date), ...]` |
 | `append_line(filepath, line)` | 줄 추가. 스레드 안전, 부모 디렉토리 자동 생성 |
 | `filter_file_lines(filepath, keep_fn)` | `keep_fn(line) → bool` 기반 in-place 필터링. 스레드 안전 |
 | `remove_lines_by_prefix(filepath, prefix)` | `filter_file_lines`에 위임 |
-| `eta_str(done, total, start_time)` | 진행률+ETA 문자열 |
+| `eta_str(done, total, start_time)` | 진행률 + **Elapsed(경과 시간)** 문자열. 형식: `[  N/TOTAL \| XX.X% \| Elapsed HH:MM:SS]` |
 | `ensure_utf8_console()` | Windows 콘솔 UTF-8 강제 설정 |
 
 ### FailedLog 클래스
@@ -167,7 +173,8 @@ def run_pipeline(
 ```
 
 `process_fn: (url: str, date: str) -> bool`. retry 모드 시 실패 목록 필터링 및 성공 후 `failed_log.remove()` 처리.
-`download_images.py`는 retry 로직이 더 복잡(3-tuple, fetch_post_failed 별도 삭제)하므로 독립 구현 유지.
+진행도 출력 간격: 대상 포스트 수가 **100개 이하면 10개 단위**, **초과면 50개 단위**.
+`download_images.py`는 retry 로직이 더 복잡(3-tuple, fetch_post_failed 별도 삭제)하므로 독립 구현 유지하며 동일한 출력 간격 규칙을 적용한다.
 
 ---
 
@@ -305,17 +312,47 @@ fetch 후 Content-Type 검증(`text/html` 아니면 `unexpected_content_type:...
 
 ## run_all.py
 
-- `POSTS_FILE = ROOT_DIR / "all_posts.txt"` (`ROOT_DIR = Path(__file__).parent / "loh_blog"`)
+### 주요 상수
+
+- `POSTS_FILE = ROOT_DIR / "all_posts.txt"`
+- `CUSTOM_POSTS_FILE = ROOT_DIR / "custom_posts.txt"`
+- `ROOT_DIR = Path(__file__).parent / "loh_blog"`
 - 실행 순서: `PIPELINE_ORDER = ("images", "md", "html")` 고정.
-- `--retry --sample` 조합 시 세 실패 파일의 union에서 샘플링.
 
-### all_posts.txt 자동 갱신
+### CLI 옵션
 
-파이프라인 실행 직전 `_maybe_refresh_posts_list()` 호출.
+| 옵션 | 설명 |
+|------|------|
+| `--images` / `--md` / `--html` | 해당 단계만 실행. 미지정 시 전체 실행. |
+| `--retry` | 실패 목록 재처리. `--sample`과 조합 가능. |
+| `--custom` | `custom_posts.txt`를 소스로 사용. 사이트맵 자동 갱신 건너뜀. `--sample`과 **동시 사용 불가**. |
+| `--sample N` | 랜덤 N개 테스트. **`all_posts.txt` 행 수의 10%를 상한**으로 자동 클램핑. `--custom`과 동시 사용 불가. |
+| `--seed N` | `--sample` 샘플링 고정 시드. |
+| `--posts PATH` | 포스트 목록 파일 직접 지정. 사이트맵 갱신 건너뜀. |
+
+### 주요 헬퍼 함수
+
+| 함수 | 설명 |
+|------|------|
+| `_maybe_refresh_posts_list()` | `all_posts.txt` 자동 갱신. 로컬 최신 날짜와 사이트맵 최신 날짜를 비교해 불일치 시 `build_and_write()` 호출. `--custom` / `--posts` 사용 시 호출하지 않음. |
+| `_count_all_posts(posts_file)` | `all_posts.txt`의 유효 행 수(공백·`#` 제외) 반환. `--sample` 상한 계산에 사용. 읽기 실패 시 `0`. |
+| `_load_failed_posts_for_retry(selected)` | 선택된 단계의 실패 파일 union → `set[str]`. |
+| `_sample_posts(posts, n, seed)` | 랜덤 샘플링. |
+
+### all_posts.txt 자동 갱신 흐름
 
 1. `_newest_local_date(POSTS_FILE)`: `all_posts.txt` 첫 줄의 날짜(내림차순 최신) 읽기.
 2. `fetch_newest_sitemap_date()`: 사이트맵에서 최신 날짜 취득.
 3. 두 값이 일치하면 갱신 스킵. 불일치하거나 로컬 파일이 없으면 `build_and_write()`로 전체 재빌드.
+
+### --sample 상한 클램핑
+
+```
+cap = max(1, all_posts.txt 유효 행 수 // 10)
+args.sample = min(args.sample, cap)
+```
+
+`all_posts.txt`가 없거나 읽기 실패 시 클램핑 없이 통과.
 
 ---
 

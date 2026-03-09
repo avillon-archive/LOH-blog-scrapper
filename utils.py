@@ -186,7 +186,7 @@ def fetch_with_retry(
 
 def load_posts(filepath: str | Path) -> list[tuple[str, str]]:
     """
-    Load all_posts.txt
+    Load all_posts.txt / custom_posts.txt
     Each line: URL<TAB>YYYY-MM-DD
     """
     posts = []
@@ -233,17 +233,13 @@ def remove_lines_by_prefix(filepath: Path, prefix: str) -> None:
 
 
 def eta_str(done: int, total: int, start_time: float) -> str:
-    """Return progress + ETA string."""
+    """Return progress + elapsed time string."""
     elapsed = time.time() - start_time
-    if done == 0:
-        return f"[{done:5d}/{total} | 0.0% | ETA --:--:--]"
-    rate = done / elapsed
-    remaining = (total - done) / rate
-    h = int(remaining // 3600)
-    m = int((remaining % 3600) // 60)
-    s = int(remaining % 60)
-    pct = done / total * 100
-    return f"[{done:5d}/{total} | {pct:5.1f}% | ETA {h:02d}:{m:02d}:{s:02d}]"
+    h = int(elapsed // 3600)
+    m = int((elapsed % 3600) // 60)
+    s = int(elapsed % 60)
+    pct = done / total * 100 if total else 0.0
+    return f"[{done:5d}/{total} | {pct:5.1f}% | Elapsed {h:02d}:{m:02d}:{s:02d}]"
 
 
 # ---------------------------------------------------------------------------
@@ -432,6 +428,8 @@ def run_pipeline(
             return
 
     total = len(posts)
+    # 대상 수가 100개 이하면 10개 단위, 초과면 50개 단위로 진행도 출력
+    report_interval = 10 if total <= 100 else 50
     start = time.time()
     ok_count = 0
     fail_count = 0
@@ -462,7 +460,7 @@ def run_pipeline(
             if success and retry_mode:
                 failed_log.remove(post_url)
 
-            if cur_completed % 50 == 0 or cur_completed == total:
+            if cur_completed % report_interval == 0 or cur_completed == total:
                 print(f"  {eta_str(cur_completed, total, start)} 성공={ok_count} 실패={fail_count}")
 
     print(f"\n[{label} 완료] 성공={ok_count}, 실패={fail_count}")

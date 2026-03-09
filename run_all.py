@@ -10,6 +10,8 @@ Usage:
   python run_all.py --sample 10
   python run_all.py --sample 10 --seed 123
   python run_all.py --md --images --sample 10
+  python run_all.py --custom
+  python run_all.py --custom --images
 """
 
 import argparse
@@ -28,6 +30,7 @@ from download_html import run_html
 
 ROOT_DIR = Path(__file__).parent / "loh_blog"
 POSTS_FILE = ROOT_DIR / "all_posts.txt"
+CUSTOM_POSTS_FILE = ROOT_DIR / "custom_posts.txt"
 FAILED_IMAGES_FILE = ROOT_DIR / "failed_images.txt"
 FAILED_MD_FILE = ROOT_DIR / "failed_md.txt"
 FAILED_HTML_FILE = ROOT_DIR / "failed_html.txt"
@@ -82,7 +85,7 @@ def _maybe_refresh_posts_list() -> None:
 
 
 def _load_failed_posts_for_retry(selected: set[str]) -> set[str]:
-    """선택된 파이프라인 단계의 실패 목록을 합산해 반환한다. (#10)"""
+    """선택된 파이프라인 단계의 실패 목록을 합산해 반환한다."""
     targets: set[str] = set()
     if "images" in selected:
         targets |= load_failed_post_urls(FAILED_IMAGES_FILE)
@@ -120,6 +123,22 @@ def _sample_source_label(selected: set[str]) -> str:
     return "union(" + " + ".join(labels) + ")"
 
 
+def _count_all_posts(posts_file: Path) -> int:
+    """all_posts.txt의 유효 행 수(공백·# 주석 제외)를 반환한다.
+
+    파일이 없거나 읽기 실패 시 0 반환.
+    """
+    try:
+        count = 0
+        for line in posts_file.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line and not line.startswith("#"):
+                count += 1
+        return count
+    except Exception:
+        return 0
+
+
 def main():
     ensure_utf8_console()
     parser = argparse.ArgumentParser(
@@ -131,18 +150,28 @@ def main():
     parser.add_argument("--md", action="store_true", help="MD만 처리")
     parser.add_argument("--html", action="store_true", help="HTML만 처리")
     parser.add_argument("--retry", action="store_true", help="실패 목록 재처리")
-    parser.add_argument("--sample", type=int, help="테스트용 랜덤 샘플 개수")
+    parser.add_argument(
+        "--custom",
+        action="store_true",
+        help="custom_posts.txt를 포스트 소스로 사용 (all_posts.txt 자동 갱신 건너뜀)",
+    )
+    parser.add_argument("--sample", type=int, help="테스트용 랜덤 샘플 개수 (all_posts.txt 행 수의 10%% 상한 적용)")
     parser.add_argument("--seed", type=int, help="샘플링 고정 시드(선택)")
     parser.add_argument(
         "--posts",
-        default=str(POSTS_FILE),
-        help=f"포스트 목록 파일 (기본: {POSTS_FILE})",
+        default=None,
+        help="포스트 목록 파일 직접 지정 (기본: all_posts.txt, --custom 시: custom_posts.txt)",
     )
     args = parser.parse_args()
 
+    # ── 인수 유효성 검사 ────────────────────────────────────────────────
     if args.sample is not None and args.sample <= 0:
         parser.error("--sample must be a positive integer")
 
+    if args.custom and args.sample is not None:
+        parser.error("--custom과 --sample은 동시에 사용할 수 없습니다")
+
+    # ── 파이프라인 단계 결정 ────────────────────────────────────────────
     selected = {
         name
         for name, enabled in (
@@ -155,15 +184,38 @@ def main():
     if not selected:
         selected = set(PIPELINE_ORDER)
 
-    _maybe_refresh_posts_list()
+    # ── 포스트 소스 파일 결정 ───────────────────────────────────────────
+    if args.posts is not None:
+        # 직접 지정한 경우 그대로 사용
+        posts_file = Path(args.posts)
+        source_label = posts_file.name
+        skip_refresh = True
+    elif args.custom:
+        posts_file = CUSTOM_POSTS_FILE
+        source_label = "custom_posts.txt"
+        skip_refresh = True
+    else:
+        posts_file = POSTS_FILE
+        source_label = "all_posts.txt"
+        skip_refresh = False
+
+    # ── all_posts.txt 자동 갱신 ────────────────────────────────────────
+    if skip_refresh:
+        if args.custom:
+            print(f"[포스트 목록] {source_label} 사용, 사이트맵 갱신 건너뜀")
+        # --posts 직접 지정 시에도 갱신 불필요
+    else:
+        _maybe_refresh_posts_list()
     print()
 
-    posts = load_posts(args.posts)
+    # ── 포스트 로드 ────────────────────────────────────────────────────
+    posts = load_posts(posts_file)
     if not posts:
-        print(f"[오류] 포스트 목록을 불러오지 못했습니다: {args.posts}")
+        print(f"[오류] 포스트 목록을 불러오지 못했습니다: {posts_file}")
         sys.exit(1)
 
-    sample_pool_label = "all_posts.txt"
+    # ── --sample 처리 ──────────────────────────────────────────────────
+    sample_pool_label = source_label
     if args.sample is not None and args.retry:
         failed_pool = _load_failed_posts_for_retry(selected)
         posts = [(url, date) for url, date in posts if url in failed_pool]
@@ -176,6 +228,17 @@ def main():
             return
 
     if args.sample is not None:
+        # all_posts.txt 행 수 기준 10% 상한 적용
+        all_count = _count_all_posts(POSTS_FILE)
+        if all_count > 0:
+            cap = max(1, all_count // 10)
+            if args.sample > cap:
+                print(
+                    f"[샘플] --sample {args.sample} → 상한 적용 → {cap}"
+                    f" (all_posts.txt {all_count}행의 10%)"
+                )
+                args.sample = cap
+
         before = len(posts)
         posts = _sample_posts(posts, args.sample, seed=args.seed)
         print(
@@ -186,6 +249,7 @@ def main():
     selected_order = [name for name in PIPELINE_ORDER if name in selected]
     print(
         f"[시작] 총 {len(posts)}개 포스트 | "
+        f"소스={source_label} | "
         f"작업={','.join(selected_order)} | "
         f"재처리={'O' if args.retry else 'X'} | "
         f"샘플={args.sample if args.sample is not None else 'X'}"
