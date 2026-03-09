@@ -33,7 +33,7 @@ DONE_FILE = ROOT_DIR / "downloaded_urls.txt"
 DONE_POSTS_FILE = ROOT_DIR / "done_posts_images.txt"  # 이미지 완료 포스트 URL 목록
 FAILED_FILE = ROOT_DIR / "failed_images.txt"
 IMAGE_MAP_FILE = ROOT_DIR / "image_map.tsv"
-THUMB_HASH_FILE = ROOT_DIR / "thumbnail_hashes.txt"  # 썸네일 해시 캐시
+THUMB_HASH_FILE = ROOT_DIR / "thumbnail_hashes.txt"  # 썸네일 SHA-256 해시 캐시
 
 IMG_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg"}
 DL_KEYWORDS = {"다운로드", "download", "다운", "받기", "저장"}
@@ -58,7 +58,6 @@ _wayback_cache: dict[str, str | None] = {}
 _wayback_events: dict[str, threading.Event] = {}  # 진행 중인 CDX 요청 추적
 _wayback_cache_lock = threading.Lock()
 
-
 # ---------------------------------------------------------------------------
 # 이미지 실패 이력 관리 (3-tuple: post_url, img_url, reason)
 # ---------------------------------------------------------------------------
@@ -71,7 +70,6 @@ class ImageFailedLog:
     img_url 을 포함하는 3-tuple 구조를 위해 독립 클래스로 구현한다.
     lock 내부에서 캐시 갱신, lock 외부에서 파일 기록 패턴을 동일하게 적용한다.
     """
-
     def __init__(self, filepath: Path, lock: threading.Lock) -> None:
         self._filepath = filepath
         self._lock = lock
@@ -92,7 +90,6 @@ class ImageFailedLog:
         return entries
 
     def record(self, post_url: str, img_url: str, reason: str) -> None:
-        """실패 항목을 기록한다. 동일 3-tuple은 중복 기록하지 않는다."""
         key = (post_url, img_url, reason)
         with self._lock:
             if self._cache is None:
@@ -175,7 +172,6 @@ def _load_or_build_og_hashes() -> set[str]:
         hashes = set(THUMB_HASH_FILE.read_text(encoding="utf-8").splitlines())
         hashes.discard("")
         return hashes
-    # 최초 실행: 전체 스캔 후 캐시 저장
     hashes = _build_hash_index(IMAGES_DIR / "thumbnails")
     ROOT_DIR.mkdir(parents=True, exist_ok=True)
     THUMB_HASH_FILE.write_text("\n".join(hashes) + ("\n" if hashes else ""), encoding="utf-8")
@@ -247,7 +243,7 @@ def save_image(content: bytes, filename: str, folder: Path) -> str:
     idx = 2
     while target.exists():
         if target.read_bytes() == content:
-            return target.name  # 동일 내용 기존 파일명 반환
+            return target.name
         target = folder / f"{stem}_{idx}{suffix}"
         idx += 1
 
@@ -283,7 +279,7 @@ def record_image_map(
 
 
 def _load_done_post_urls(filepath: Path) -> set[str]:
-    """이미지 수집이 완료된 포스트 URL 집합을 반환한다."""
+    """이미지 수집이 완료된 포스트 URL 목록을 반환한다."""
     if not filepath.exists():
         return set()
     return {
@@ -404,11 +400,9 @@ def _wayback_oldest(url: str) -> str | None:
         if url in _wayback_cache:
             return _wayback_cache[url]
         if url in _wayback_events:
-            # 다른 스레드가 이미 fetch 중 → 완료 대기
             event = _wayback_events[url]
             do_fetch = False
         else:
-            # 이 스레드가 fetch를 담당
             event = threading.Event()
             _wayback_events[url] = event
             do_fetch = True
@@ -418,7 +412,6 @@ def _wayback_oldest(url: str) -> str | None:
         with _wayback_cache_lock:
             return _wayback_cache.get(url)
 
-    # fetch 수행 (잠금 외부 – 네트워크 I/O)
     params = {
         "url": url,
         "output": "json",
@@ -589,7 +582,6 @@ def _fetch_wayback_gdrive_from_post(
             continue
         if _normalized_link_key(original_url) != target_key:
             continue
-        # Wayback HTML 래퍼가 아닌 이미지 바이너리를 직접 가져오기 위해 im_ 적용
         image = _fetch_image(_add_im(candidate_url))
         if image:
             return image
@@ -615,7 +607,6 @@ def _fetch_wayback_img_from_post(
     if not target_key:
         return None
 
-    # og:image meta → img 태그 순으로 후보 수집
     candidates: list[str] = []
     og = soup.find("meta", property="og:image")
     if og and og.get("content"):
@@ -710,7 +701,6 @@ def collect_image_urls(soup: BeautifulSoup, post_url: str) -> list[tuple[str, st
         if hostname in GDRIVE_HOSTS:
             _add(abs_src, "gdrive")
         elif "/content/images/" in parsed_src.path and hostname == BLOG_HOST:
-            # 자사 블로그 호스트의 Ghost 콘텐츠 이미지만 수집
             _add(abs_src, "img")
         elif hostname == COMMUNITY_CDN_HOST and path_ext in IMG_EXTS:
             _add(abs_src, "img")
@@ -774,7 +764,7 @@ def _determine_filename(
             return original_base
         return f"image_{idx}{_ext_from_mime(content_type)}"
 
-    # gdrive
+    # gdrive: Content-Disposition → query param(name/title) → MD5 해시 순으로 폴백
     if cd_name:
         return cd_name
     parsed = urllib.parse.urlparse(original_href)

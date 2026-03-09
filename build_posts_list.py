@@ -1,11 +1,5 @@
 """
 build_posts_list.py - parse sitemap-posts.xml and build all_posts.txt
-
-Usage:
-  python3 build_posts_list.py
-
-Output:
-  all_posts.txt  (URL<TAB>YYYY-MM-DD, sorted by date ascending)
 """
 import re
 import sys
