@@ -10,9 +10,7 @@ from bs4 import BeautifulSoup, NavigableString, Tag
 from utils import (
     DEFAULT_MAX_WORKERS,
     FailedLog,
-    append_line,
     clean_url,
-    date_to_folder,
     ensure_utf8_console,
     extract_category,
     fetch_with_retry,
@@ -49,7 +47,6 @@ _md_fail_lock = threading.Lock()
 
 # 모듈 레벨 FailedLog 인스턴스 (utils.FailedLog 로 공통화)
 _failed_log = FailedLog(FAILED_FILE, _md_fail_lock)
-
 
 
 # ---------------------------------------------------------------------------
@@ -163,12 +160,25 @@ def _wrap_marker(inner: str, marker: str) -> str:
 
 
 def _strip_marker(text: str, marker: str) -> str:
-    """text 안에 있는 동일 마커 래핑을 제거한다 (중첩 마커 평탄화용).
+    """text가 동일 마커로 외부 래핑된 경우에만 마커를 제거한다 (중첩 마커 평탄화용).
 
-    non-greedy 매칭으로 순차 제거하여 중첩된 모든 마커 쌍을 해소한다.
+    마커 문자 경계를 직접 확인하므로 ``**bold**`` 내부에서 ``*``를 오탐하지 않는다.
+    예) _strip_marker("**text**", "**") → "text"   (이중 bold 제거)
+        _strip_marker("**text**", "*")  → "**text**" (오탐 없음, inner[0]=="*" 감지)
+        _strip_marker("*text*",   "*")  → "text"
     """
-    escaped = re.escape(marker)
-    return re.sub(rf'{escaped}(.+?){escaped}', r'\1', text, flags=re.DOTALL)
+    n = len(marker)
+    while True:
+        if len(text) <= 2 * n:
+            break
+        if text[:n] != marker or text[-n:] != marker:
+            break
+        inner = text[n:-n]
+        # 안쪽 경계가 마커 문자이면 더 긴 마커(예: ** 내부 *)이므로 중단
+        if inner and (inner[0] == marker[0] or inner[-1] == marker[0]):
+            break
+        text = inner
+    return text
 
 
 def inline_to_md(

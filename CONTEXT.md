@@ -273,7 +273,7 @@ content_tag 탐색 순서: `.gh-content` → `.post-content` → `article` → `
 - **제거 태그**: `author-card`, `post-share`, `post-tags`, `post-nav`, `related-posts`, `comments`.
 - **제목 중복 방지**: body 내 h1 sweep 후 `title_tag.parent is not None` 체크로 header 범위 외 제목 별도 제거.
 - **`_wrap_marker(inner, marker)`**: `**`, `*`, `~~` 마커를 씌울 때 앞뒤 공백을 마커 바깥으로 이동. whitespace-only인 경우 마커 없이 원문 공백을 그대로 반환 (중첩 strong 평탄화 시 공백 소멸 방지).
-- **`_strip_marker(text, marker)`**: non-greedy 매칭으로 text 내 중첩된 동일 마커 래핑을 모두 제거. `strong/b`, `em/i`, `del/s/strike` 변환 시 `_children_inline` 결과에 적용 후 `_wrap_marker`를 씌운다. 원본 HTML에 잘못 중첩된 `<strong><strong>...</strong></strong>` 구조를 단일 `**...**`로 평탄화한다.
+- **`_strip_marker(text, marker)`**: text가 해당 마커로 외부 래핑된 경우에만 마커를 제거한다 (중첩 마커 평탄화용). 마커 문자 경계를 직접 검사하므로 `**bold**` 내부에서 `*`를 오탐하지 않는다. `strong/b`, `em/i`, `del/s/strike` 변환 시 `_children_inline` 결과에 적용 후 `_wrap_marker`를 씌운다. 원본 HTML에 잘못 중첩된 `<strong><strong>...</strong></strong>` 구조를 단일 `**...**`로 평탄화한다.
 - **`img_to_md(img_tag, post_url, image_map, img_prefix)`**: `image_map` 등록 시 `img_prefix + 상대경로` 형태로 참조. `img_prefix`는 `process_post`에서 `target_dir.relative_to(ROOT_DIR).parts`의 depth로 자동 계산 (`md/` → `"../"`, `md/카테고리/` → `"../../"`). 미등록 시 절대 URL 폴백.
 - `INLINE_MAX_DEPTH = 60`: 비정상 중첩 HTML 안전장치.
 - `collapse_blank_lines`: 연속 빈 줄 최대 1개.

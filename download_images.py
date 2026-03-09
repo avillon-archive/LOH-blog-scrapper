@@ -20,9 +20,11 @@ from utils import (
     ensure_utf8_console,
     eta_str,
     fetch_with_retry,
+    filter_file_lines,
     load_failed_post_urls,
     load_image_map,
     load_posts,
+    remove_lines_by_prefix,
 )
 
 ROOT_DIR = Path(__file__).parent / "loh_blog"
@@ -98,13 +100,9 @@ class ImageFailedLog:
             if key in self._cache:
                 return
             self._cache.add(key)
-        ROOT_DIR.mkdir(parents=True, exist_ok=True)
-        from utils import append_line as _append_line
-        _append_line(self._filepath, f"{post_url}\t{img_url}\t{reason}")
+        append_line(self._filepath, f"{post_url}\t{img_url}\t{reason}")
 
     def remove(self, post_url: str, reason: str | None = None) -> None:
-        """post_url(+선택적 reason) 에 해당하는 항목을 삭제한다."""
-        from utils import remove_lines_by_prefix, filter_file_lines
         if not self._filepath.exists():
             return
         prefix = post_url + "\t"
@@ -346,7 +344,6 @@ def remove_from_failed(post_url: str, reason: str | None = None) -> None:
 
 
 def backfill_image_map():
-
     ROOT_DIR.mkdir(parents=True, exist_ok=True)
     image_map = load_image_map(IMAGE_MAP_FILE)
 
@@ -431,25 +428,26 @@ def _wayback_oldest(url: str) -> str | None:
         "filter": "statuscode:200",
         "limit": "1",
     }
-    resp = fetch_with_retry(WAYBACK_CDX_API, params=params, timeout=15)
     result: str | None = None
-    if resp is not None:
-        try:
-            rows = resp.json()
-            if isinstance(rows, list) and len(rows) >= 2:
-                first = rows[1]
-                if isinstance(first, list) and len(first) >= 2:
-                    timestamp = str(first[0]).strip()
-                    original = str(first[1]).strip()
-                    if timestamp and original:
-                        result = f"https://web.archive.org/web/{timestamp}/{original}"
-        except Exception:
-            pass
-
-    with _wayback_cache_lock:
-        _wayback_cache[url] = result
-        _wayback_events.pop(url, None)
-    event.set()
+    try:
+        resp = fetch_with_retry(WAYBACK_CDX_API, params=params, timeout=15)
+        if resp is not None:
+            try:
+                rows = resp.json()
+                if isinstance(rows, list) and len(rows) >= 2:
+                    first = rows[1]
+                    if isinstance(first, list) and len(first) >= 2:
+                        timestamp = str(first[0]).strip()
+                        original = str(first[1]).strip()
+                        if timestamp and original:
+                            result = f"https://web.archive.org/web/{timestamp}/{original}"
+            except Exception:
+                pass
+    finally:
+        with _wayback_cache_lock:
+            _wayback_cache[url] = result
+            _wayback_events.pop(url, None)
+        event.set()
     return result
 
 
@@ -805,8 +803,6 @@ def download_one_image(
     image_map: dict[str, str],
     post_soup_cache: dict[str, tuple[BeautifulSoup, str] | None] | None = None,
 ) -> bool:
-    ROOT_DIR.mkdir(parents=True, exist_ok=True)
-
     seen_key = _seen_key(utype, img_url)
 
     # 빠른 비잠금 확인 (최적화; save_image의 내용 동일성 검사로 중복 저장 방지)

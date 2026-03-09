@@ -12,7 +12,7 @@ import sys
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
-from utils import fetch_with_retry, get_session
+from utils import fetch_with_retry
 
 SITEMAP_URL = "https://blog-ko.lordofheroes.com/sitemap-posts.xml"
 ROOT_DIR = Path(__file__).parent / "loh_blog"
