@@ -159,6 +159,12 @@ def build_links_and_write() -> int:
             if url:
                 merged[url] = date
 
+    if not merged:
+        raise ValueError(
+            "all_links.txt 병합 대상이 없습니다. "
+            f"{OUTPUT_FILE.name} / {PAGES_OUTPUT_FILE.name} 를 확인하세요."
+        )
+
     entries = sorted(
         merged.items(),
         key=lambda x: (x[1] != "", x[1]),

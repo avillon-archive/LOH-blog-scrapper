@@ -207,11 +207,11 @@ def run_pipeline(
 | `PAGES_OUTPUT_FILE` | `loh_blog/all_pages.txt` | sitemap-pages.xml 결과, 날짜 내림차순 |
 | `LINKS_OUTPUT_FILE` | `loh_blog/all_links.txt` | 두 파일 병합·중복 제거, 날짜 내림차순 |
 
-### 공개 함수
+### 주요 함수
 
 | 함수 | 설명 |
 |------|------|
-| `_build_sitemap_file(sitemap_url, output_file)` | 범용 단일 사이트맵 fetch → 정렬 → 파일 저장. `build_and_write` / `build_pages_and_write` 공통 내부 헬퍼. |
+| `_build_sitemap_file(sitemap_url, output_file)` | (내부 헬퍼) 범용 단일 사이트맵 fetch → 정렬 → 파일 저장. `build_and_write` / `build_pages_and_write` 공통 내부 헬퍼. |
 | `build_and_write() -> tuple[int, list[tuple[str, str]]]` | sitemap-posts.xml → `all_posts.txt` 전체 재작성. `(URL 수, entries 리스트)` 반환. |
 | `build_pages_and_write() -> tuple[int, list[tuple[str, str]]]` | sitemap-pages.xml → `all_pages.txt` 전체 재작성. 시그니처·반환값은 `build_and_write()`와 동일. |
 | `build_links_and_write() -> int` | `all_posts.txt` + `all_pages.txt` 병합·중복 제거 → `all_links.txt` 재작성. posts 항목 우선(동일 URL 시 posts 날짜 사용). 저장된 항목 수 반환. |

@@ -23,7 +23,7 @@ _file_lock = threading.Lock()
 REQUEST_DELAY: float = 0.2
 
 # Default number of parallel workers for ThreadPoolExecutor.
-DEFAULT_MAX_WORKERS: int = 8
+DEFAULT_MAX_WORKERS: int = 32
 
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -388,6 +388,51 @@ def url_to_slug(post_url: str) -> str:
     parts = [part for part in path.split("/") if part]
     raw = parts[-1] if parts else re.sub(r"[^\w-]", "_", post_url)
     return raw[:120]
+
+
+# ---------------------------------------------------------------------------
+# 지연 flush 파일 버퍼 (download_images.py 고빈도 I/O 최적화)
+# ---------------------------------------------------------------------------
+
+
+class LineBuffer:
+    """스레드 안전한 지연 flush 파일 버퍼.
+
+    append_line 호출을 메모리에 누적하다가 flush_every 건 이상 쌓이면
+    자동으로 파일에 일괄 기록한다. 프로세스 종료 전 flush_all()을 반드시
+    호출해야 미기록 데이터 유실을 방지할 수 있다.
+
+    download_images.py 의 고빈도 파일(downloaded_urls.txt, image_map.tsv 등)에
+    사용하기 위해 설계됐다. 모듈 수준 append_line 과 달리 _file_lock 을 경유하지
+    않으므로 _state_lock / _save_lock 과 경합하지 않는다.
+    """
+
+    def __init__(self, filepath: Path, flush_every: int = 100) -> None:
+        self._filepath = filepath
+        self._flush_every = flush_every
+        self._buf: list[str] = []
+        self._lock = threading.Lock()
+
+    def add(self, line: str) -> None:
+        """줄을 버퍼에 추가한다. 버퍼가 flush_every 건을 초과하면 자동 flush."""
+        with self._lock:
+            self._buf.append(line)
+            if len(self._buf) >= self._flush_every:
+                self._flush_locked()
+
+    def flush_all(self) -> None:
+        """버퍼에 남은 모든 줄을 파일에 기록한다. run 종료 시 반드시 호출."""
+        with self._lock:
+            self._flush_locked()
+
+    def _flush_locked(self) -> None:
+        """_lock 보유 상태에서 호출해야 한다."""
+        if not self._buf:
+            return
+        self._filepath.parent.mkdir(parents=True, exist_ok=True)
+        with open(self._filepath, "a", encoding="utf-8") as f:
+            f.write("\n".join(self._buf) + "\n")
+        self._buf.clear()
 
 
 # ---------------------------------------------------------------------------

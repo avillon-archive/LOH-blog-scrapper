@@ -151,7 +151,7 @@ def _sample_source_label(selected: set[str]) -> str:
     return "union(" + " + ".join(labels) + ")"
 
 
-def _count_all_posts(posts_file: Path) -> int:
+def _count_file_lines(posts_file: Path) -> int:
     """파일의 유효 행 수(공백·# 주석 제외)를 반환한다.
 
     파일이 없거나 읽기 실패 시 0 반환.
@@ -267,7 +267,7 @@ def main():
 
     if args.sample is not None:
         # all_links.txt 행 수 기준 10% 상한 적용
-        all_count = _count_all_posts(LINKS_FILE)
+        all_count = _count_file_lines(LINKS_FILE)
         if all_count > 0:
             cap = max(1, all_count // 10)
             if args.sample > cap:

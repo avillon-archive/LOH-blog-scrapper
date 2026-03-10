@@ -14,6 +14,7 @@ from bs4 import BeautifulSoup
 
 from utils import (
     DEFAULT_MAX_WORKERS,
+    LineBuffer,
     append_line,
     clean_url,
     date_to_folder,
@@ -50,8 +51,27 @@ WAYBACK_CDX_API = "https://web.archive.org/cdx/search/cdx"
 # 스레드 안전을 위한 잠금
 # ---------------------------------------------------------------------------
 
-# seen_urls / og_hashes / image_map 갱신 및 파일 저장을 원자적으로 처리
+# ImageFailedLog 내부 캐시 전용 락 (기존 _dl_lock 역할 유지)
 _dl_lock = threading.Lock()
+
+# seen_urls / og_hashes / image_map 딕셔너리 갱신 전용 (in-memory, 극히 빠름)
+_state_lock = threading.Lock()
+
+# save_image() 파일명 충돌 해소 전용 (디스크 I/O 직렬화)
+_save_lock = threading.Lock()
+
+# ---------------------------------------------------------------------------
+# 고빈도 파일용 LineBuffer (append_line 대신 사용해 파일 syscall 대폭 감소)
+# ---------------------------------------------------------------------------
+
+# 이미지 URL 완료 이력 (이미지당 1회)
+_done_buf = LineBuffer(DONE_FILE)
+# image_map.tsv 갱신 (이미지당 1회)
+_map_buf = LineBuffer(IMAGE_MAP_FILE)
+# 썸네일 해시 캐시 (신규 썸네일당 1회)
+_thumb_buf = LineBuffer(THUMB_HASH_FILE)
+# 포스트 완료 이력 (포스트당 1회)
+_done_posts_buf = LineBuffer(DONE_POSTS_FILE)
 
 # ---------------------------------------------------------------------------
 # Wayback CDX 캐시
@@ -236,17 +256,25 @@ def save_image(content: bytes, filename: str, folder: Path) -> str:
     - 동일 내용의 파일이 이미 존재하면 해당 파일명을 반환한다.
     - 새로 저장하면 실제 저장된 파일명을 반환한다.
     - None을 반환하지 않으므로 호출 측에서 항상 유효한 경로를 얻는다.
+
+    충돌 검사는 크기 비교(cheap) → 바이트 비교(expensive) 순서로 수행해
+    불필요한 전체 파일 읽기를 최소화한다.
     """
     folder.mkdir(parents=True, exist_ok=True)
     filename = _safe_filename(filename)
     stem = Path(filename).stem
     suffix = Path(filename).suffix or ".bin"
+    content_len = len(content)
 
     target = folder / filename
     idx = 2
     while target.exists():
-        if target.read_bytes() == content:
-            return target.name
+        try:
+            # 크기가 다르면 즉시 다음 후보로 이동 (전체 읽기 불필요)
+            if target.stat().st_size == content_len and target.read_bytes() == content:
+                return target.name
+        except OSError:
+            pass
         target = folder / f"{stem}_{idx}{suffix}"
         idx += 1
 
@@ -265,7 +293,10 @@ def record_image_map(
     image_map: dict[str, str],
     filepath: Path,
 ):
-    """image_map 딕셔너리와 파일에 항목을 추가한다 (중복 방지)."""
+    """image_map 딕셔너리와 파일에 항목을 추가한다 (중복 방지).
+
+    backfill_image_map 전용. download_one_image 는 _state_lock + _map_buf 를 직접 사용.
+    """
     if not clean_url_key or not relative_path:
         return
     existing = image_map.get(clean_url_key)
@@ -312,17 +343,6 @@ def load_seen(filepath: Path) -> set[str]:
             else:
                 seen.add(f"main:{row}")
     return seen
-
-
-def record_seen(seen_key: str, seen_urls: set[str], filepath: Path):
-    """seen_urls 집합에 키를 추가하고 파일에 기록한다 (잠금 외부에서 호출)."""
-    seen_urls.add(seen_key)
-    append_line(filepath, seen_key)
-
-
-def _load_failed_image_entries() -> set[tuple[str, str, str]]:
-    """하위 호환용 래퍼 (내부 사용 전용)."""
-    return _failed_log._load()  # type: ignore[attr-defined]
 
 
 def record_failed(post_url: str, img_url: str, reason: str) -> None:
@@ -797,7 +817,7 @@ def download_one_image(
 ) -> bool:
     seen_key = _seen_key(utype, img_url)
 
-    # 빠른 비잠금 확인 (최적화; save_image의 내용 동일성 검사로 중복 저장 방지)
+    # 빠른 비잠금 확인
     if seen_key in seen_urls:
         return True
 
@@ -835,36 +855,58 @@ def download_one_image(
         return False
 
     content, final_url, content_type, content_disposition = payload
-
-    # ── 파일 저장 및 상태 갱신 (잠금 내부) ──────────────────────────────
     filename = _determine_filename(
         utype, img_url, final_url, content_type, content_disposition, idx
     )
+    safe_name = _safe_filename(filename)
 
-    with _dl_lock:
+    # ── Phase 1: in-memory 상태 예약 (_state_lock, 극히 빠름) ────────────
+    # 파일 I/O 없이 in-memory set/dict 만 갱신해 락 보유 시간을 최소화한다.
+    should_save = False
+    img_key: str | None = None
+    content_hash: str | None = None
+
+    with _state_lock:
         # 잠금 획득 후 재확인 (다른 스레드가 먼저 처리했을 수 있음)
         if seen_key in seen_urls:
             return True
 
         if utype == "og_image":
             content_hash = _sha256_bytes(content)
-            if content_hash not in og_hashes:
-                # 해시가 새로운 경우에만 디스크에 저장
-                save_image(content, _safe_filename(filename), folder)
+            if content_hash in og_hashes:
+                # 중복 썸네일 – seen 기록만 남기고 저장 생략
+                seen_urls.add(seen_key)
+                should_save = False
+            else:
                 og_hashes.add(content_hash)
-                append_line(THUMB_HASH_FILE, content_hash)
-            # 중복 해시인 경우 파일 저장은 건너뛰지만 seen 기록은 항상 남김
-            seen_urls.add(seen_key)
+                seen_urls.add(seen_key)
+                should_save = True
         else:
-            # save_image는 항상 실제 저장(또는 기존) 파일명을 반환한다.
-            saved_name = save_image(content, _safe_filename(filename), folder)
-            key = clean_url(img_url)
-            if key not in image_map:
-                rel = (folder / saved_name).relative_to(ROOT_DIR).as_posix()
-                record_image_map(key, rel, image_map, IMAGE_MAP_FILE)
             seen_urls.add(seen_key)
+            img_key = clean_url(img_url)
+            should_save = True
 
-    append_line(DONE_FILE, seen_key)
+    # ── Phase 2: 파일 저장 (_save_lock, _state_lock 해제 후) ────────────
+    # _state_lock 은 이미 해제됐으므로 다른 스레드의 in-memory 갱신을 막지 않는다.
+    if should_save:
+        if utype == "og_image":
+            # 썸네일: _save_lock 으로 파일명 충돌 해소 후 저장
+            with _save_lock:
+                save_image(content, safe_name, folder)
+            # 해시는 Phase 1 에서 이미 og_hashes 에 추가됨 → 버퍼에만 기록
+            _thumb_buf.add(content_hash)  # type: ignore[arg-type]
+        else:
+            # 일반 이미지: 저장 후 실제 파일명으로 image_map 갱신
+            with _save_lock:
+                saved_name = save_image(content, safe_name, folder)
+            rel = (folder / saved_name).relative_to(ROOT_DIR).as_posix()
+            # image_map dict 갱신은 _state_lock 으로 보호 (파일 기록은 버퍼)
+            with _state_lock:
+                if img_key not in image_map:  # type: ignore[operator]
+                    image_map[img_key] = rel   # type: ignore[index]
+                    _map_buf.add(f"{img_key}\t{rel}")
+
+    _done_buf.add(seen_key)
     return True
 
 
@@ -919,7 +961,7 @@ def process_post(
     # 포스트 내 모든 이미지가 성공한 경우 완료로 기록 (이미지가 없는 포스트 포함)
     if fail == 0:
         done_post_urls.add(post_url)
-        append_line(DONE_POSTS_FILE, post_url)
+        _done_posts_buf.add(post_url)
 
     return PostProcessResult(ok=ok, fail=fail, post_fetch_ok=True)
 
@@ -984,6 +1026,12 @@ def run_images(posts: list[tuple[str, str]], retry_mode: bool = False):
 
             if cur_completed % report_interval == 0 or cur_completed == total:
                 print(f"  {eta_str(cur_completed, total, start)} 성공={total_ok} 실패={total_fail}")
+
+    # 모든 worker 완료 후 버퍼 잔량을 파일에 flush
+    _done_buf.flush_all()
+    _map_buf.flush_all()
+    _thumb_buf.flush_all()
+    _done_posts_buf.flush_all()
 
     print(f"\n[이미지 완료] 성공={total_ok}, 실패={total_fail}")
 
