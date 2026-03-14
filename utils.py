@@ -309,6 +309,7 @@ def write_text_unique(
     post_url: str,
     lock: threading.Lock,
     done_file: Path,
+    force_overwrite: bool = False,
 ) -> str | None:
     """slug 충돌을 해소하며 텍스트 파일을 저장하고 done 상태를 갱신한다.
 
@@ -317,6 +318,10 @@ def write_text_unique(
 
     1단계(잠금 외부): 동일 내용 파일 탐색 (I/O 집중 구간)
     2단계(잠금 내부): 최종 경로 확정·쓰기·done 상태 갱신
+
+    Args:
+        force_overwrite: True 이면 동일 slug 파일이 존재하고 내용이 다를 때
+                         _2 suffix 없이 기존 파일을 덮어쓴다.
 
     Returns:
         실제 저장(또는 기존 일치) 파일의 slug 문자열.
@@ -329,14 +334,18 @@ def write_text_unique(
     # ── 1단계: 충돌 탐색 (잠금 외부) ──────────────────────────────────
     path = target_dir / f"{slug}{suffix}"
     next_idx = 2
-    while path.exists():
-        try:
-            if path.read_text(encoding="utf-8") == content:
-                break  # 동일 내용 → 이 경로를 후보로 사용
-        except OSError:
-            pass
-        path = target_dir / f"{slug}_{next_idx}{suffix}"
-        next_idx += 1
+    if force_overwrite:
+        # force_overwrite: 기존 slug 경로를 그대로 사용 (덮어쓰기 대상)
+        pass
+    else:
+        while path.exists():
+            try:
+                if path.read_text(encoding="utf-8") == content:
+                    break  # 동일 내용 → 이 경로를 후보로 사용
+            except OSError:
+                pass
+            path = target_dir / f"{slug}_{next_idx}{suffix}"
+            next_idx += 1
 
     # ── 2단계: 경로 확정·쓰기·상태 갱신 (잠금 내부) ───────────────────
     actual_slug: str | None = None
@@ -345,7 +354,6 @@ def write_text_unique(
             return None  # 다른 스레드가 먼저 완료
 
         if path.exists():
-            # 외부 탐색 이후 다른 스레드가 이 경로를 선점했을 수 있으므로 재확인
             try:
                 on_disk = path.read_text(encoding="utf-8")
             except OSError:
@@ -356,6 +364,12 @@ def write_text_unique(
                 actual_slug = path.stem
                 if actual_slug not in done_map:
                     done_map[actual_slug] = post_url
+                done_urls.add(post_url)
+            elif force_overwrite:
+                # force_overwrite: 내용이 다르면 기존 파일 덮어쓰기
+                path.write_text(content, encoding="utf-8")
+                actual_slug = path.stem
+                done_map[actual_slug] = post_url
                 done_urls.add(post_url)
             else:
                 # 선점됨 → 잠금 내에서 빈 슬롯 탐색 후 쓰기

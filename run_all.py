@@ -32,6 +32,9 @@ from build_posts_list import (
     build_pages_and_write,
     build_links_and_write,
     fetch_newest_sitemap_date,
+    fetch_newest_single_sitemap_date,
+    SITEMAP_URL,
+    SITEMAP_PAGES_URL,
 )
 from download_images import run_images
 from download_md import run_md
@@ -110,6 +113,35 @@ def _maybe_refresh_posts_list() -> None:
         print(f"[포스트 목록] all_links.txt 갱신 완료 ({count_links}개 URL, 최신={remote_date})")
     except Exception as e:
         print(f"[포스트 목록] all_links.txt 갱신 실패: {e}")
+
+
+def _maybe_refresh_single(
+    posts_file: Path, sitemap_url: str, build_fn, label: str
+) -> None:
+    """단일 사이트맵의 최신 날짜를 비교해 필요 시 파일을 갱신한다."""
+    local_date = _newest_local_date(posts_file)
+
+    print(f"[포스트 목록] {label} 사이트맵 최신 날짜 확인 중...")
+    remote_date = fetch_newest_single_sitemap_date(sitemap_url)
+
+    if not remote_date:
+        print(f"[포스트 목록] {label} 사이트맵 날짜 확인 실패, 갱신 건너뜀")
+        return
+
+    if local_date and local_date == remote_date:
+        print(f"[포스트 목록] {label} 최신 상태 ({local_date}), 갱신 불필요")
+        return
+
+    if local_date:
+        print(f"[포스트 목록] {label} 갱신 필요 (로컬={local_date} → 사이트맵={remote_date})")
+    else:
+        print(f"[포스트 목록] {posts_file.name} 없음, 신규 생성 (사이트맵={remote_date})")
+
+    try:
+        count, _ = build_fn()
+        print(f"[포스트 목록] {posts_file.name} 갱신 완료 ({count}개 URL)")
+    except Exception as e:
+        print(f"[포스트 목록] {posts_file.name} 갱신 실패: {e}")
 
 
 def _load_failed_posts_for_retry(selected: set[str]) -> set[str]:
@@ -222,26 +254,28 @@ def main():
         selected = set(PIPELINE_ORDER)
 
     # ── 포스트 소스 파일 결정 ───────────────────────────────────────────
+    force_download = False
     if args.posts:
         posts_file = POSTS_FILE
         source_label = "all_posts.txt"
-        skip_refresh = True
     elif args.pages:
         posts_file = PAGES_FILE
         source_label = "all_pages.txt"
-        skip_refresh = True
     elif args.custom:
         posts_file = CUSTOM_POSTS_FILE
         source_label = "custom_posts.txt"
-        skip_refresh = True
+        force_download = True
     else:
         posts_file = LINKS_FILE
         source_label = "all_links.txt"
-        skip_refresh = False
 
-    # ── all_links.txt 자동 갱신 ────────────────────────────────────────
-    if skip_refresh:
-        print(f"[포스트 목록] {source_label} 사용, 사이트맵 갱신 건너뜀")
+    # ── 사이트맵 갱신 ─────────────────────────────────────────────────
+    if args.posts:
+        _maybe_refresh_single(POSTS_FILE, SITEMAP_URL, build_and_write, "posts")
+    elif args.pages:
+        _maybe_refresh_single(PAGES_FILE, SITEMAP_PAGES_URL, build_pages_and_write, "pages")
+    elif args.custom:
+        print(f"[포스트 목록] {source_label} 사용, 사이트맵 갱신 건너뜀 (강제 재다운로드)")
     else:
         _maybe_refresh_posts_list()
     print()
@@ -302,15 +336,15 @@ def main():
         if step == "images":
             print("▶ 이미지 다운로드 시작")
             print("━" * 60)
-            run_images(posts, retry_mode=args.retry)
+            run_images(posts, retry_mode=args.retry, force_download=force_download)
         elif step == "md":
             print("▶ MD 파일 저장 시작")
             print("━" * 60)
-            run_md(posts, retry_mode=args.retry)
+            run_md(posts, retry_mode=args.retry, force_download=force_download)
         elif step == "html":
             print("▶ HTML 파일 저장 시작")
             print("━" * 60)
-            run_html(posts, retry_mode=args.retry)
+            run_html(posts, retry_mode=args.retry, force_download=force_download)
         print()
 
     elapsed = time.time() - total_start

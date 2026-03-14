@@ -20,6 +20,7 @@ from utils import (
     date_to_folder,
     ensure_utf8_console,
     eta_str,
+    extract_category,
     fetch_with_retry,
     filter_file_lines,
     load_failed_post_urls,
@@ -34,7 +35,8 @@ DONE_FILE = ROOT_DIR / "downloaded_urls.txt"
 DONE_POSTS_FILE = ROOT_DIR / "done_posts_images.txt"  # 이미지 완료 포스트 URL 목록
 FAILED_FILE = ROOT_DIR / "failed_images.txt"
 IMAGE_MAP_FILE = ROOT_DIR / "image_map.tsv"
-THUMB_HASH_FILE = ROOT_DIR / "thumbnail_hashes.txt"  # 썸네일 SHA-256 해시 캐시
+THUMB_HASH_FILE = ROOT_DIR / "thumbnail_hashes.txt"  # 썸네일 SHA-256 해시 캐시 (레거시)
+IMG_HASH_FILE = ROOT_DIR / "image_hashes.tsv"  # 통합 이미지 해시 캐시 (hash\trel_path)
 
 IMG_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg"}
 DL_KEYWORDS = {
@@ -54,7 +56,7 @@ WAYBACK_CDX_API = "https://web.archive.org/cdx/search/cdx"
 # ImageFailedLog 내부 캐시 전용 락 (기존 _dl_lock 역할 유지)
 _dl_lock = threading.Lock()
 
-# seen_urls / og_hashes / image_map 딕셔너리 갱신 전용 (in-memory, 극히 빠름)
+# seen_urls / img_hashes / image_map 딕셔너리 갱신 전용 (in-memory, 극히 빠름)
 _state_lock = threading.Lock()
 
 # save_image() 파일명 충돌 해소 전용 (디스크 I/O 직렬화)
@@ -68,8 +70,10 @@ _save_lock = threading.Lock()
 _done_buf = LineBuffer(DONE_FILE)
 # image_map.tsv 갱신 (이미지당 1회)
 _map_buf = LineBuffer(IMAGE_MAP_FILE)
-# 썸네일 해시 캐시 (신규 썸네일당 1회)
+# 썸네일 해시 캐시 (레거시, 마이그레이션 후 미사용)
 _thumb_buf = LineBuffer(THUMB_HASH_FILE)
+# 통합 이미지 해시 캐시 (이미지당 1회)
+_img_hash_buf = LineBuffer(IMG_HASH_FILE)
 # 포스트 완료 이력 (포스트당 1회)
 _done_posts_buf = LineBuffer(DONE_POSTS_FILE)
 
@@ -187,18 +191,72 @@ def _build_hash_index(folder: Path) -> set[str]:
 
 
 def _load_or_build_og_hashes() -> set[str]:
-    """
-    썸네일 해시를 캐시 파일(thumbnail_hashes.txt)에서 로드.
-    캐시가 없으면 thumbnails 폴더를 스캔해 해시를 계산하고 캐시 파일 생성. (최초 1회)
-    """
+    """레거시: 썸네일 해시 set 로드 (마이그레이션용)."""
     if THUMB_HASH_FILE.exists():
         hashes = set(THUMB_HASH_FILE.read_text(encoding="utf-8").splitlines())
         hashes.discard("")
         return hashes
-    hashes = _build_hash_index(IMAGES_DIR / "thumbnails")
+    return set()
+
+
+def _load_or_build_img_hashes() -> tuple[dict[str, str], set[str]]:
+    """통합 이미지 해시 캐시를 로드한다.
+
+    Returns:
+        (img_hashes, thumb_hashes):
+            img_hashes  – dict[sha256_hex, rel_path]  모든 이미지의 해시→경로
+            thumb_hashes – set[sha256_hex]  썸네일(og_image)인 해시 집합
+    """
+    img_hashes: dict[str, str] = {}
+    thumb_hashes: set[str] = set()
+
+    if IMG_HASH_FILE.exists():
+        for line in IMG_HASH_FILE.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            parts = line.split("\t")
+            if len(parts) >= 2:
+                h = parts[0].strip()
+                rel = parts[1].strip()
+                is_thumb = parts[2].strip() == "T" if len(parts) >= 3 else False
+                if h and rel:
+                    img_hashes[h] = rel
+                    if is_thumb:
+                        thumb_hashes.add(h)
+        return img_hashes, thumb_hashes
+
+    # 캐시 미존재 → 기존 이미지 폴더를 스캔해 빌드
+    old_thumb_dir = (IMAGES_DIR / "thumbnails").resolve()
+    # 레거시 썸네일 해시 로드 (마이그레이션)
+    legacy_thumb_hashes = _load_or_build_og_hashes()
+
+    if IMAGES_DIR.exists():
+        for file_path in IMAGES_DIR.rglob("*"):
+            if not file_path.is_file():
+                continue
+            if file_path.suffix.lower() not in IMG_EXTS:
+                continue
+            try:
+                h = _sha256_bytes(file_path.read_bytes())
+                rel = file_path.relative_to(ROOT_DIR).as_posix()
+                if h not in img_hashes:
+                    img_hashes[h] = rel
+                # 레거시 썸네일 폴더이거나 레거시 해시에 존재하면 썸네일
+                is_in_thumb_dir = old_thumb_dir in file_path.resolve().parents
+                if is_in_thumb_dir or h in legacy_thumb_hashes:
+                    thumb_hashes.add(h)
+            except OSError:
+                continue
+
+    # 캐시 파일 작성
     ROOT_DIR.mkdir(parents=True, exist_ok=True)
-    THUMB_HASH_FILE.write_text("\n".join(hashes) + ("\n" if hashes else ""), encoding="utf-8")
-    return hashes
+    lines = [
+        f"{h}\t{rel}\t{'T' if h in thumb_hashes else ''}"
+        for h, rel in img_hashes.items()
+    ]
+    IMG_HASH_FILE.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
+    return img_hashes, thumb_hashes
 
 
 # ---------------------------------------------------------------------------
@@ -364,13 +422,12 @@ def backfill_image_map():
     ROOT_DIR.mkdir(parents=True, exist_ok=True)
     image_map = load_image_map(IMAGE_MAP_FILE)
 
-    _thumb_dir = (IMAGES_DIR / "thumbnails").resolve()
     files = [
         f
         for f in IMAGES_DIR.rglob("*")
         if f.is_file()
         and f.suffix.lower() in IMG_EXTS
-        and _thumb_dir not in f.resolve().parents
+        and "thumbnails" not in f.relative_to(IMAGES_DIR).parts
     ]
 
     by_name: dict[str, list[Path]] = {}
@@ -811,8 +868,10 @@ def download_one_image(
     folder: Path,
     idx: int,
     seen_urls: set[str],
-    og_hashes: set[str],
+    img_hashes: dict[str, str],
     image_map: dict[str, str],
+    thumb_hashes: set[str],
+    hash_dup_count: dict[str, int],
     post_soup_cache: dict[str, tuple[BeautifulSoup, str] | None] | None = None,
 ) -> bool:
     seen_key = _seen_key(utype, img_url)
@@ -861,50 +920,45 @@ def download_one_image(
     safe_name = _safe_filename(filename)
 
     # ── Phase 1: in-memory 상태 예약 (_state_lock, 극히 빠름) ────────────
-    # 파일 I/O 없이 in-memory set/dict 만 갱신해 락 보유 시간을 최소화한다.
     should_save = False
     img_key: str | None = None
-    content_hash: str | None = None
+    content_hash = _sha256_bytes(content)
 
     with _state_lock:
         # 잠금 획득 후 재확인 (다른 스레드가 먼저 처리했을 수 있음)
         if seen_key in seen_urls:
             return True
 
-        if utype == "og_image":
-            content_hash = _sha256_bytes(content)
-            if content_hash in og_hashes:
-                # 중복 썸네일 – seen 기록만 남기고 저장 생략
-                seen_urls.add(seen_key)
-                should_save = False
-            else:
-                og_hashes.add(content_hash)
-                seen_urls.add(seen_key)
-                should_save = True
+        existing_rel = img_hashes.get(content_hash)
+        if existing_rel is not None:
+            # 해시 중복: 같은 콘텐츠가 이미 저장됨 → 저장 생략, 경로만 매핑
+            seen_urls.add(seen_key)
+            hash_dup_count[content_hash] = hash_dup_count.get(content_hash, 0) + 1
+            img_key = clean_url(img_url)
+            if img_key not in image_map:
+                image_map[img_key] = existing_rel
+                _map_buf.add(f"{img_key}\t{existing_rel}")
+            should_save = False
         else:
             seen_urls.add(seen_key)
             img_key = clean_url(img_url)
+            if utype == "og_image":
+                thumb_hashes.add(content_hash)
             should_save = True
 
     # ── Phase 2: 파일 저장 (_save_lock, _state_lock 해제 후) ────────────
-    # _state_lock 은 이미 해제됐으므로 다른 스레드의 in-memory 갱신을 막지 않는다.
     if should_save:
-        if utype == "og_image":
-            # 썸네일: _save_lock 으로 파일명 충돌 해소 후 저장
-            with _save_lock:
-                save_image(content, safe_name, folder)
-            # 해시는 Phase 1 에서 이미 og_hashes 에 추가됨 → 버퍼에만 기록
-            _thumb_buf.add(content_hash)  # type: ignore[arg-type]
-        else:
-            # 일반 이미지: 저장 후 실제 파일명으로 image_map 갱신
-            with _save_lock:
-                saved_name = save_image(content, safe_name, folder)
-            rel = (folder / saved_name).relative_to(ROOT_DIR).as_posix()
-            # image_map dict 갱신은 _state_lock 으로 보호 (파일 기록은 버퍼)
-            with _state_lock:
-                if img_key not in image_map:  # type: ignore[operator]
-                    image_map[img_key] = rel   # type: ignore[index]
-                    _map_buf.add(f"{img_key}\t{rel}")
+        with _save_lock:
+            saved_name = save_image(content, safe_name, folder)
+        rel = (folder / saved_name).relative_to(ROOT_DIR).as_posix()
+        is_thumb = utype == "og_image"
+        # img_hashes 및 image_map 갱신
+        with _state_lock:
+            img_hashes[content_hash] = rel
+            if img_key not in image_map:  # type: ignore[operator]
+                image_map[img_key] = rel   # type: ignore[index]
+                _map_buf.add(f"{img_key}\t{rel}")
+        _img_hash_buf.add(f"{content_hash}\t{rel}\t{'T' if is_thumb else ''}")
 
     _done_buf.add(seen_key)
     return True
@@ -919,8 +973,10 @@ def process_post(
     post_url: str,
     post_date: str,
     seen_urls: set[str],
-    og_hashes: set[str],
+    img_hashes: dict[str, str],
     image_map: dict[str, str],
+    thumb_hashes: set[str],
+    hash_dup_count: dict[str, int],
     done_post_urls: set[str],
 ) -> PostProcessResult:
     # 이미 모든 이미지가 완료된 포스트는 HTTP fetch 없이 즉시 스킵
@@ -935,23 +991,29 @@ def process_post(
     soup = BeautifulSoup(resp.text, "lxml")
     images = collect_image_urls(soup, post_url)
 
-    folder = IMAGES_DIR / date_to_folder(post_date)
-    thumbnail_folder = IMAGES_DIR / "thumbnails"
+    # 카테고리 추출 → 저장 경로 결정
+    category = extract_category(soup)
+    date_folder = date_to_folder(post_date)
+    if category:
+        folder = IMAGES_DIR / category / date_folder
+    else:
+        folder = IMAGES_DIR / date_folder
 
     ok = 0
     fail = 0
     post_soup_cache: dict[str, tuple[BeautifulSoup, str] | None] = {}
     for idx, (img_url, utype) in enumerate(images, start=1):
-        target_folder = thumbnail_folder if utype == "og_image" else folder
         if download_one_image(
             img_url,
             utype,
             post_url,
-            target_folder,
+            folder,
             idx,
             seen_urls,
-            og_hashes,
+            img_hashes,
             image_map,
+            thumb_hashes,
+            hash_dup_count,
             post_soup_cache=post_soup_cache,
         ):
             ok += 1
@@ -967,18 +1029,135 @@ def process_post(
 
 
 # ---------------------------------------------------------------------------
+# Phase 2: 공유 이미지 재배치
+# ---------------------------------------------------------------------------
+
+
+# images/{category}/{YYYY}/{MM}/ 패턴에서 카테고리를 추출하는 정규식
+_CAT_DATE_RE = re.compile(
+    r"^images/(?:([^/]+)/)?(\d{4})/(\d{2})/.+$"
+)
+
+
+def _relocate_shared_images(
+    img_hashes: dict[str, str],
+    thumb_hashes: set[str],
+    hash_dup_count: dict[str, int],
+    image_map: dict[str, str],
+) -> int:
+    """해시 중복이 발생한(재사용) 이미지를 카테고리 루트로 이동한다.
+
+    - 일반 이미지 → images/{category}/
+    - 썸네일     → images/{category}/thumbnails/
+    - 카테고리 없는 경우 → images/ 또는 images/thumbnails/
+
+    Returns:
+        이동된 파일 수.
+    """
+    import shutil
+
+    moved = 0
+    # 경로 변경을 기록해 image_map 일괄 갱신에 사용
+    path_remap: dict[str, str] = {}  # old_rel → new_rel
+
+    for content_hash, dup_count in hash_dup_count.items():
+        if dup_count < 1:
+            continue
+        old_rel = img_hashes.get(content_hash)
+        if not old_rel:
+            continue
+
+        m = _CAT_DATE_RE.match(old_rel)
+        if not m:
+            # 이미 카테고리 루트에 있거나 패턴 불일치 → 스킵
+            continue
+
+        category = m.group(1) or ""  # 카테고리 없으면 ""
+        filename = Path(old_rel).name
+        is_thumb = content_hash in thumb_hashes
+
+        if is_thumb:
+            if category:
+                new_dir = IMAGES_DIR / category / "thumbnails"
+            else:
+                new_dir = IMAGES_DIR / "thumbnails"
+        else:
+            if category:
+                new_dir = IMAGES_DIR / category
+            else:
+                new_dir = IMAGES_DIR
+
+        new_rel = (new_dir / filename).relative_to(ROOT_DIR).as_posix()
+        if new_rel == old_rel:
+            continue
+
+        old_path = ROOT_DIR / old_rel
+        if not old_path.exists():
+            continue
+
+        new_dir.mkdir(parents=True, exist_ok=True)
+        new_path = new_dir / filename
+
+        # 파일명 충돌 방지
+        if new_path.exists() and new_path != old_path:
+            stem = new_path.stem
+            suffix = new_path.suffix
+            idx = 2
+            while new_path.exists():
+                new_path = new_dir / f"{stem}_{idx}{suffix}"
+                idx += 1
+            new_rel = new_path.relative_to(ROOT_DIR).as_posix()
+
+        shutil.move(str(old_path), str(new_path))
+        path_remap[old_rel] = new_rel
+        img_hashes[content_hash] = new_rel
+        moved += 1
+
+        # 빈 디렉토리 정리
+        parent = old_path.parent
+        while parent != IMAGES_DIR:
+            try:
+                parent.rmdir()
+                parent = parent.parent
+            except OSError:
+                break
+
+    if not path_remap:
+        return 0
+
+    # image_map 경로 일괄 갱신
+    for url_key, rel in list(image_map.items()):
+        if rel in path_remap:
+            image_map[url_key] = path_remap[rel]
+
+    # image_map.tsv 전체 재작성
+    lines = [f"{k}\t{v}" for k, v in image_map.items()]
+    IMAGE_MAP_FILE.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
+
+    # image_hashes.tsv 전체 재작성
+    lines = [
+        f"{h}\t{rel}\t{'T' if h in thumb_hashes else ''}"
+        for h, rel in img_hashes.items()
+    ]
+    IMG_HASH_FILE.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
+
+    return moved
+
+
+# ---------------------------------------------------------------------------
 # 실행 진입점
 # ---------------------------------------------------------------------------
 
 
-def run_images(posts: list[tuple[str, str]], retry_mode: bool = False):
+def run_images(posts: list[tuple[str, str]], retry_mode: bool = False, force_download: bool = False):
     ensure_utf8_console()
     ROOT_DIR.mkdir(parents=True, exist_ok=True)
     IMAGES_DIR.mkdir(parents=True, exist_ok=True)
     seen_urls = load_seen(DONE_FILE)
-    og_hashes = _load_or_build_og_hashes()
+    img_hashes, thumb_hashes = _load_or_build_img_hashes()
+    hash_dup_count: dict[str, int] = {}
     image_map = load_image_map(IMAGE_MAP_FILE)
-    done_post_urls = _load_done_post_urls(DONE_POSTS_FILE)
+    done_post_urls: set[str] = set() if force_download else _load_done_post_urls(DONE_POSTS_FILE)
 
     if retry_mode:
         if not FAILED_FILE.exists():
@@ -1002,7 +1181,10 @@ def run_images(posts: list[tuple[str, str]], retry_mode: bool = False):
 
     with ThreadPoolExecutor(max_workers=DEFAULT_MAX_WORKERS) as executor:
         future_to_post = {
-            executor.submit(process_post, url, date, seen_urls, og_hashes, image_map, done_post_urls): (url, date)
+            executor.submit(
+                process_post, url, date, seen_urls, img_hashes, image_map,
+                thumb_hashes, hash_dup_count, done_post_urls,
+            ): (url, date)
             for url, date in posts
         }
         for future in as_completed(future_to_post):
@@ -1030,8 +1212,14 @@ def run_images(posts: list[tuple[str, str]], retry_mode: bool = False):
     # 모든 worker 완료 후 버퍼 잔량을 파일에 flush
     _done_buf.flush_all()
     _map_buf.flush_all()
-    _thumb_buf.flush_all()
+    _img_hash_buf.flush_all()
     _done_posts_buf.flush_all()
+
+    # Phase 2: 재사용 이미지를 카테고리 루트로 이동
+    if hash_dup_count:
+        moved = _relocate_shared_images(img_hashes, thumb_hashes, hash_dup_count, image_map)
+        if moved:
+            print(f"[이미지] 공유 이미지 {moved}개 재배치 완료")
 
     print(f"\n[이미지 완료] 성공={total_ok}, 실패={total_fail}")
 

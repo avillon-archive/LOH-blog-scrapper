@@ -41,6 +41,7 @@ def process_post(
     post_url: str,
     done_slugs: dict[str, str],
     done_urls: set[str],
+    force_overwrite: bool = False,
 ) -> bool:
     # 빠른 비잠금 확인
     if post_url in done_urls:
@@ -75,6 +76,7 @@ def process_post(
             target_dir, slug, ".html", html_text,
             done_slugs, done_urls, post_url,
             _html_done_lock, DONE_FILE,
+            force_overwrite=force_overwrite,
         )
     except OSError as e:
         _failed_log.record(post_url, f"write_failed:{e}")
@@ -87,15 +89,15 @@ def process_post(
 # ---------------------------------------------------------------------------
 
 
-def run_html(posts: list[tuple[str, str]], retry_mode: bool = False) -> None:
+def run_html(posts: list[tuple[str, str]], retry_mode: bool = False, force_download: bool = False) -> None:
     ensure_utf8_console()
     ROOT_DIR.mkdir(parents=True, exist_ok=True)
     HTML_DIR.mkdir(parents=True, exist_ok=True)
     done_slugs = load_done_file(DONE_FILE)
-    done_urls = set(done_slugs.values())
+    done_urls: set[str] = set() if force_download else set(done_slugs.values())
 
     # process_post는 date를 사용하지 않으므로 lambda로 시그니처를 맞춘다.
-    process_fn = lambda url, date: process_post(url, done_slugs, done_urls)
+    process_fn = lambda url, date: process_post(url, done_slugs, done_urls, force_overwrite=force_download)
 
     run_pipeline(
         posts,

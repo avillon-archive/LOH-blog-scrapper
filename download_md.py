@@ -517,6 +517,7 @@ def process_post(
     done_slugs: dict[str, str],
     done_urls: set[str],
     image_map: dict[str, str],
+    force_overwrite: bool = False,
 ) -> bool:
     # 빠른 비잠금 확인
     if post_url in done_urls:
@@ -549,6 +550,7 @@ def process_post(
             target_dir, slug, ".md", md_text,
             done_slugs, done_urls, post_url,
             _md_done_lock, DONE_FILE,
+            force_overwrite=force_overwrite,
         )
     except OSError as e:
         _failed_log.record(post_url, f"write_failed:{e}")
@@ -561,15 +563,15 @@ def process_post(
 # ---------------------------------------------------------------------------
 
 
-def run_md(posts: list[tuple[str, str]], retry_mode: bool = False) -> None:
+def run_md(posts: list[tuple[str, str]], retry_mode: bool = False, force_download: bool = False) -> None:
     ensure_utf8_console()
     ROOT_DIR.mkdir(parents=True, exist_ok=True)
     MD_DIR.mkdir(parents=True, exist_ok=True)
     image_map = load_image_map(IMAGE_MAP_FILE)
     done_slugs = load_done_file(DONE_FILE)
-    done_urls = set(done_slugs.values())
+    done_urls: set[str] = set() if force_download else set(done_slugs.values())
 
-    process_fn = lambda url, date: process_post(url, date, done_slugs, done_urls, image_map)
+    process_fn = lambda url, date: process_post(url, date, done_slugs, done_urls, image_map, force_overwrite=force_download)
 
     run_pipeline(
         posts,

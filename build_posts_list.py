@@ -100,6 +100,20 @@ def _build_sitemap_file(
     return len(entries), entries
 
 
+def fetch_newest_single_sitemap_date(sitemap_url: str) -> str:
+    """단일 사이트맵 URL에서 가장 최신 lastmod 날짜(YYYY-MM-DD)를 반환한다.
+
+    실패 시 "" 반환.
+    """
+    try:
+        xml = fetch_sitemap(sitemap_url)
+        entries = parse_sitemap(xml)
+        dated = [d for _, d in entries if d]
+        return max(dated) if dated else ""
+    except Exception:
+        return ""
+
+
 def fetch_newest_sitemap_date() -> str:
     """posts + pages 사이트맵에서 가장 최신 lastmod 날짜(YYYY-MM-DD)를 반환한다.
 
@@ -108,14 +122,9 @@ def fetch_newest_sitemap_date() -> str:
     """
     dates: list[str] = []
     for url in (SITEMAP_URL, SITEMAP_PAGES_URL):
-        try:
-            xml = fetch_sitemap(url)
-            entries = parse_sitemap(xml)
-            dated = [d for _, d in entries if d]
-            if dated:
-                dates.append(max(dated))
-        except Exception:
-            pass
+        d = fetch_newest_single_sitemap_date(url)
+        if d:
+            dates.append(d)
     return max(dates) if dates else ""
 
 

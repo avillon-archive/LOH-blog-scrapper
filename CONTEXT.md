@@ -66,8 +66,10 @@ python3 build_posts_list.py             # all_posts.txt / all_pages.txt / all_li
   all_pages.txt              ← sitemap-pages.xml URL+날짜 목록 (날짜 내림차순)
   all_links.txt              ← all_posts.txt + all_pages.txt 병합·중복 제거 (기본 소스)
   custom_posts.txt           ← 수동 작성 URL 목록 (--custom 옵션 소스)
-  images/YYYY/MM/            ← 본문 이미지 (날짜별 폴더)
-  images/thumbnails/         ← og:image 썸네일
+  images/카테고리명/YYYY/MM/  ← 본문 이미지 (카테고리·날짜별 폴더, 고유 이미지)
+  images/카테고리명/          ← 재사용 일반 이미지 (해시 중복 2+회 출현)
+  images/카테고리명/thumbnails/ ← 재사용 썸네일 (해시 중복 2+회 출현)
+  images/YYYY/MM/            ← 카테고리 없는 본문 이미지 (고유)
   md/                        ← 카테고리 없는 MD 파일
   md/카테고리명/              ← 카테고리별 MD 파일
   html/                      ← 카테고리 없는 원문 HTML
@@ -75,7 +77,8 @@ python3 build_posts_list.py             # all_posts.txt / all_pages.txt / all_li
   downloaded_urls.txt        ← 이미지 URL 완료 이력 (main:/thumb: prefix)
   done_posts_images.txt      ← 이미지 완료 포스트 URL 목록
   image_map.tsv              ← clean_url → images/... 상대경로 (ROOT_DIR 기준)
-  thumbnail_hashes.txt       ← 썸네일 SHA-256 해시 캐시
+  thumbnail_hashes.txt       ← 썸네일 SHA-256 해시 캐시 (레거시, 마이그레이션용)
+  image_hashes.tsv           ← 통합 이미지 해시 캐시 (hash\trel_path\tT/빈값)
   done_md.txt                ← MD 완료 이력 (slug\tpost_url)
   done_html.txt              ← HTML 완료 이력 (slug\tpost_url)
   failed_images.txt          ← 이미지 실패 이력 (post_url\timg_url\treason)
@@ -88,9 +91,9 @@ MD 파일 내 이미지 참조는 MD 파일 위치 기준 상대경로. `img_pre
 | MD 파일 위치 | depth | img_prefix | 실제 경로 |
 |---|---|---|---|
 | `md/slug.md` | 1 | `../` | `../images/YYYY/MM/x.png` |
-| `md/카테고리/slug.md` | 2 | `../../` | `../../images/YYYY/MM/x.png` |
+| `md/카테고리/slug.md` | 2 | `../../` | `../../images/카테고리/YYYY/MM/x.png` |
 
-`image_map.tsv`에 없는 이미지는 절대 URL로 폴백. 썸네일(`og_image`)은 `image_map.tsv`에 기록하지 않으며 URL-파일명 매핑이 없다.
+`image_map.tsv`에 없는 이미지는 절대 URL로 폴백. 썸네일(`og_image`)도 `image_map.tsv`에 기록한다.
 
 ---
 
@@ -237,7 +240,9 @@ def run_pipeline(
 
 ### 락 구조
 
-`_dl_lock` 단일 락이 `seen_urls` / `og_hashes` / `image_map` 갱신 및 파일 저장의 원자성을 보장.
+- `_state_lock`: `seen_urls` / `img_hashes` / `image_map` / `hash_dup_count` / `thumb_hashes` in-memory 갱신 전용.
+- `_save_lock`: `save_image()` 파일명 충돌 해소 전용 (디스크 I/O 직렬화).
+- `_dl_lock`: `ImageFailedLog` 내부 캐시 전용.
 
 ### ImageFailedLog 클래스
 
@@ -281,14 +286,26 @@ content_tag 탐색 순서: `.gh-content` → `.post-content` → `article` → `
 - `_fetch_wayback_gdrive_from_post`: img 탐색 시 `src` 및 `data-src` 모두 확인. lazy-load 이미지가 Wayback 스냅샷에 `data-src`로만 남아있는 경우를 처리한다.
 - Wayback 포스트 스냅샷 탐색 함수들은 `_normalized_link_key` 완전 일치 비교.
 
+### 2단계 처리 흐름
+
+**Phase 1 (다운로드)**: `process_post()`에서 `extract_category(soup)` 호출 → `images/{category}/{YYYY}/{MM}/`에 저장. 일반 이미지·썸네일 모두 SHA-256 해시 기반 중복 체크 (`img_hashes: dict[str, str]`). 해시 중복 시 저장 생략, `image_map`에 기존 경로 매핑. 중복 횟수는 `hash_dup_count`로 추적.
+
+**Phase 2 (후처리)**: `_relocate_shared_images()` — `hash_dup_count`에서 재사용 이미지 식별 후 카테고리 루트로 이동:
+- 일반 이미지 → `images/{category}/`
+- 썸네일 → `images/{category}/thumbnails/`
+- `image_map.tsv`, `image_hashes.tsv` 경로 자동 갱신. 빈 디렉토리 정리.
+
+### 해시 캐시
+
+`image_hashes.tsv` (형식: `sha256\trel_path\tT/빈값`). 모든 이미지(일반+썸네일) 통합 관리. 레거시 `thumbnail_hashes.txt`에서 자동 마이그레이션 (첫 실행 시). `_load_or_build_img_hashes()` → `(img_hashes, thumb_hashes)` 반환.
+
 ### 기타
 
 - `save_image(content, filename, folder) -> str`: 충돌 시 `_2`, `_3` 번호 부여. 항상 유효한 파일명 반환.
 - `failed_images.txt` 형식: `post_url\timg_url\treason`. fetch_post_failed는 img_url 빈 문자열.
 - retry 모드: `fetch_post_failed`는 포스트 fetch 성공 시 제거. `download_failed`는 `fail==0 and ok>0` 시에만 제거. retry 대상 0개이면 `run_pipeline`과 동일하게 메시지 출력 후 즉시 반환.
-- `--backfill-map`: 기존 다운로드 이력으로 `image_map.tsv` 재구성. thumbnails 폴더는 resolved path 비교로 제외.
-- 썸네일 해시 캐시: 시작 시 파일이 있으면 로드, 없으면 thumbnails 폴더 전체 스캔 후 생성 (최초 1회).
-- `image_map.tsv`에 썸네일(`og_image`) 경로는 기록하지 않는다. 썸네일은 hash 기반 중복 제거만 수행하며 URL-파일명 매핑이 없다.
+- `--backfill-map`: 기존 다운로드 이력으로 `image_map.tsv` 재구성. thumbnails 폴더는 `relative_to(IMAGES_DIR).parts`에 `"thumbnails"` 포함 여부로 제외.
+- `image_map.tsv`에 썸네일(`og_image`) 경로도 기록한다.
 - 단독 실행 시 `--posts` 기본값은 `all_links.txt`.
 
 ---
