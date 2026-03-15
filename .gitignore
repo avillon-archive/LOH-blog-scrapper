@@ -1,5 +1,7 @@
 loh_blog/
 __pycache__/
+.claude/*.json
+.vscode/
 *.pyc
 *.pyo
 .env

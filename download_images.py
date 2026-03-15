@@ -2,12 +2,15 @@
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
+import difflib
 import hashlib
+import json
 import mimetypes
 from pathlib import Path
 import re
 import threading
 import time
+from typing import NamedTuple
 import urllib.parse
 
 from bs4 import BeautifulSoup
@@ -38,6 +41,7 @@ FAILED_FILE = ROOT_DIR / "failed_images.txt"
 IMAGE_MAP_FILE = ROOT_DIR / "image_map.tsv"
 THUMB_HASH_FILE = ROOT_DIR / "thumbnail_hashes.txt"  # 썸네일 SHA-256 해시 캐시 (레거시)
 IMG_HASH_FILE = ROOT_DIR / "image_hashes.tsv"  # 통합 이미지 해시 캐시 (hash\trel_path)
+MULTILANG_LOG_FILE = IMAGES_DIR / "multilang_fallback.tsv"  # 다국어 폴백 성공 로그
 
 IMG_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg"}
 DL_KEYWORDS = {
@@ -49,6 +53,28 @@ BLOG_HOST = "blog-ko.lordofheroes.com"
 GDRIVE_HOSTS = {"drive.google.com", "docs.google.com", "lh3.googleusercontent.com"}
 COMMUNITY_CDN_HOST = "community-ko-cdn.lordofheroes.com"
 WAYBACK_CDX_API = "https://web.archive.org/cdx/search/cdx"
+
+# 다국어 블로그 Wayback 폴백용 상수
+MULTILANG_BLOG_HOSTS = {
+    "en": "blog-en.lordofheroes.com",
+    "ja": "blog-ja.lordofheroes.com",
+}
+MULTILANG_EARLIEST_DATE = {"en": "2020-10-20", "ja": "2021-01-15"}
+_KO_SUFFIX_RE = re.compile(r"(?i)_ko(?=[\._\-])")
+_LANG_SUFFIX_MAP = {"en": "_EN", "ja": "_JP"}
+
+# Kakao PF 폴백용 상수
+KAKAO_PF_PROFILE = "_YXZqxb"
+KAKAO_PF_API = f"https://pf.kakao.com/rocket-web/web/profiles/{KAKAO_PF_PROFILE}/posts"
+KAKAO_PF_INDEX_FILE = ROOT_DIR / "kakao_pf_index.json"
+KAKAO_PF_LOG_FILE = IMAGES_DIR / "kakao_pf_log.tsv"
+
+
+class KakaoPFPost(NamedTuple):
+    id: int
+    title: str
+    published_at: int  # Unix ms
+    media_urls: list[str]
 
 # ---------------------------------------------------------------------------
 # 스레드 안전을 위한 잠금
@@ -77,6 +103,10 @@ _thumb_buf = LineBuffer(THUMB_HASH_FILE)
 _img_hash_buf = LineBuffer(IMG_HASH_FILE)
 # 포스트 완료 이력 (포스트당 1회)
 _done_posts_buf = LineBuffer(DONE_POSTS_FILE)
+# 다국어 폴백 성공 로그 (이미지당 1회)
+_multilang_log_buf = LineBuffer(MULTILANG_LOG_FILE)
+# Kakao PF 폴백 성공 로그 (이미지당 1회)
+_kakao_pf_log_buf = LineBuffer(KAKAO_PF_LOG_FILE)
 
 # ---------------------------------------------------------------------------
 # Wayback CDX 캐시
@@ -734,6 +764,439 @@ def _fetch_wayback_linked_from_post(
 
 
 # ---------------------------------------------------------------------------
+# 다국어 Wayback 폴백 헬퍼
+# ---------------------------------------------------------------------------
+
+
+def _multilang_image_url_candidates(img_url: str) -> list[tuple[str, str]]:
+    """이미지 URL의 호스트를 EN/JA로 교체하고 _KO 접미사를 치환한 후보 목록을 반환한다."""
+    parsed = urllib.parse.urlparse(img_url)
+    hostname = (parsed.hostname or "").lower()
+
+    candidates: list[tuple[str, str]] = []
+    for lang, lang_host in MULTILANG_BLOG_HOSTS.items():
+        if hostname == BLOG_HOST:
+            new_host = lang_host
+        elif hostname == COMMUNITY_CDN_HOST:
+            # EN/JA는 community CDN 대신 블로그 호스트를 사용
+            new_host = lang_host
+        else:
+            continue
+
+        new_url = parsed._replace(netloc=new_host).geturl()
+        suffix = _LANG_SUFFIX_MAP[lang]
+        if _KO_SUFFIX_RE.search(new_url):
+            replaced = _KO_SUFFIX_RE.sub(suffix, new_url)
+            candidates.append((replaced, lang))
+        else:
+            candidates.append((new_url, lang))
+
+    return candidates
+
+
+def _build_multilang_date_index() -> dict[str, list[tuple[str, str]]]:
+    """EN/JA 사이트맵의 Wayback 스냅샷을 가져와 {date: [(post_url, lang), ...]} 인덱스를 구축한다."""
+    from build_posts_list import parse_sitemap
+
+    date_index: dict[str, list[tuple[str, str]]] = {}
+
+    for lang, lang_host in MULTILANG_BLOG_HOSTS.items():
+        sitemap_url = f"https://{lang_host}/sitemap-posts.xml"
+        wayback_url = _wayback_oldest(sitemap_url)
+        if not wayback_url:
+            print(f"  [{lang.upper()}] 사이트맵 Wayback 스냅샷 없음, 건너뜀")
+            continue
+
+        resp = fetch_with_retry(wayback_url, allow_redirects=True, timeout=30)
+        if not resp:
+            print(f"  [{lang.upper()}] 사이트맵 fetch 실패, 건너뜀")
+            continue
+
+        resp.encoding = resp.apparent_encoding or "utf-8"
+        try:
+            entries = parse_sitemap(resp.text)
+        except Exception as exc:
+            print(f"  [{lang.upper()}] 사이트맵 파싱 실패: {exc}")
+            continue
+
+        count = 0
+        for post_url, date in entries:
+            if date:
+                date_index.setdefault(date, []).append((post_url, lang))
+                count += 1
+        print(f"  [{lang.upper()}] {count}개 포스트 인덱싱 완료")
+
+    return date_index
+
+
+def _multilang_post_url_candidates(
+    ko_post_url: str,
+    post_date: str,
+    date_index: dict[str, list[tuple[str, str]]],
+) -> list[tuple[str, str]]:
+    """KO 포스트 URL에 대응하는 EN/JA 포스트 URL 후보를 반환한다."""
+    candidates: list[tuple[str, str]] = []
+    seen: set[str] = set()
+
+    # 1순위: slug 기반 (blog-ko → blog-en/blog-ja 단순 치환)
+    for lang, lang_host in MULTILANG_BLOG_HOSTS.items():
+        if post_date and post_date < MULTILANG_EARLIEST_DATE.get(lang, ""):
+            continue
+        slug_url = ko_post_url.replace(BLOG_HOST, lang_host)
+        if slug_url != ko_post_url and slug_url not in seen:
+            seen.add(slug_url)
+            candidates.append((slug_url, lang))
+
+    # 2순위: date 기반 (같은 날짜의 포스트 검색)
+    if post_date and post_date in date_index:
+        for alt_url, lang in date_index[post_date]:
+            if post_date < MULTILANG_EARLIEST_DATE.get(lang, ""):
+                continue
+            if alt_url not in seen:
+                seen.add(alt_url)
+                candidates.append((alt_url, lang))
+
+    return candidates
+
+
+def _fetch_wayback_img_by_position(
+    alt_post_url: str,
+    idx: int,
+    utype: str,
+    post_soup_cache: dict[str, tuple[BeautifulSoup, str] | None] | None = None,
+) -> tuple[bytes, str, str, str] | None:
+    """Wayback 포스트 스냅샷에서 idx(1-based) 위치의 이미지를 다운로드한다.
+
+    collect_image_urls()는 BLOG_HOST(blog-ko) 전용이라 EN/JA 호스트 이미지를 인식
+    못하므로, 여기서는 본문 내 모든 <img> 태그를 직접 순회한다.
+    """
+    soup_with_base = _fetch_wayback_post_soup(alt_post_url, post_soup_cache)
+    if not soup_with_base:
+        return None
+    soup, wayback_post = soup_with_base
+
+    # og:image 처리
+    if utype == "og_image":
+        og = soup.find("meta", property="og:image")
+        if og and og.get("content"):
+            target_url = urllib.parse.urljoin(wayback_post, og["content"])
+            payload = _fetch_image(_add_im(target_url))
+            if payload:
+                return payload
+        return None
+
+    # 본문 이미지 수집 (호스트 무관하게 모든 <img> 태그)
+    content_tag = (
+        soup.select_one(".gh-content")
+        or soup.select_one(".post-content")
+        or soup.select_one("article")
+        or soup.find("main")
+        or soup
+    )
+    img_urls: list[str] = []
+    for img in content_tag.find_all("img"):
+        if "author-profile-image" in (img.get("class") or []):
+            continue
+        if img.find_parent("div", class_="author-card"):
+            continue
+        src = img.get("src") or img.get("data-src") or ""
+        if src:
+            img_urls.append(urllib.parse.urljoin(wayback_post, src))
+
+    # idx는 1-based — KO 포스트에서의 순서와 대응
+    target_idx = idx - 1
+    if target_idx < 0 or target_idx >= len(img_urls):
+        return None
+
+    target_url = img_urls[target_idx]
+    payload = _fetch_image(_add_im(target_url))
+    if payload:
+        return payload
+    # Wayback URL에서 원본 추출 후 직접 fetch
+    original = _original_url_from_wayback(target_url)
+    return _fetch_image(original) if original != target_url else None
+
+
+def _fetch_multilang_wayback_image(
+    post_url: str,
+    img_url: str,
+    post_date: str,
+    utype: str,
+    idx: int,
+    date_index: dict[str, list[tuple[str, str]]],
+    post_soup_cache: dict[str, tuple[BeautifulSoup, str] | None] | None = None,
+) -> tuple[bytes, str, str, str, str] | None:
+    """다국어 블로그 Wayback 스냅샷에서 이미지를 탐색하는 통합 폴백 함수.
+
+    Returns:
+        성공 시 (content, final_url, content_type, cd, fallback_post_url) 5-tuple.
+        fallback_post_url은 폴백에 사용된 포스트 URL (직접 CDX 성공 시 빈 문자열).
+    """
+    # 조기 종료: 모든 언어의 earliest date보다 이전이면 시도 불필요
+    if post_date and all(
+        post_date < earliest for earliest in MULTILANG_EARLIEST_DATE.values()
+    ):
+        return None
+
+    # ── Phase A: URL/파일명 기반 매칭 ──────────────────────────────────
+    img_candidates = _multilang_image_url_candidates(img_url)
+    for candidate_img_url, lang in img_candidates:
+        if post_date and post_date < MULTILANG_EARLIEST_DATE.get(lang, ""):
+            continue
+        payload = _fetch_wayback_image(candidate_img_url)
+        if payload:
+            return (*payload, "")
+
+    # Phase A-2: 포스트 HTML에서 URL 매칭
+    post_candidates = _multilang_post_url_candidates(post_url, post_date, date_index)
+    for alt_post_url, lang in post_candidates:
+        # 언어별 변환된 img_url로 기존 함수 재사용
+        lang_img_candidates = [u for u, l in img_candidates if l == lang]
+        for candidate_img_url in lang_img_candidates:
+            if utype in ("img", "og_image"):
+                payload = _fetch_wayback_img_from_post(
+                    alt_post_url, candidate_img_url, post_soup_cache
+                )
+            elif utype == "gdrive":
+                payload = _fetch_wayback_gdrive_from_post(
+                    alt_post_url, candidate_img_url, post_soup_cache
+                )
+            elif utype == "linked_keyword":
+                payload = _fetch_wayback_linked_from_post(
+                    alt_post_url, candidate_img_url, post_soup_cache
+                )
+            else:
+                payload = None
+            if payload:
+                return (*payload, alt_post_url)
+
+    # ── Phase B: Position 기반 매칭 ────────────────────────────────────
+    for alt_post_url, lang in post_candidates:
+        payload = _fetch_wayback_img_by_position(
+            alt_post_url, idx, utype, post_soup_cache
+        )
+        if payload:
+            return (*payload, alt_post_url)
+
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Kakao PF 폴백 헬퍼
+# ---------------------------------------------------------------------------
+
+
+def _build_kakao_pf_index() -> dict[str, list[KakaoPFPost]]:
+    """Kakao PF 게시글을 페이지네이션하며 {date: [KakaoPFPost, ...]} 인덱스를 구축한다.
+
+    JSON 캐시 파일이 있으면 로드 후 새 포스트만 추가 fetch 한다.
+    """
+    from datetime import datetime, timezone, timedelta
+
+    KST = timezone(timedelta(hours=9))
+
+    def _ms_to_date(ms: int) -> str:
+        return datetime.fromtimestamp(ms / 1000, tz=KST).strftime("%Y-%m-%d")
+
+    def _extract_media_urls(media_list: list[dict]) -> list[str]:
+        urls: list[str] = []
+        for m in media_list:
+            if m.get("type") == "image" and m.get("url"):
+                urls.append(m["url"])
+            elif m.get("type") == "link":
+                for img in m.get("images") or []:
+                    if img.get("url"):
+                        urls.append(img["url"])
+                        break  # link 당 첫 번째 이미지만
+        return urls
+
+    # ── 캐시 로드 ─────────────────────────────────────────────────────────
+    cached_posts: list[dict] = []
+    last_sort: str | None = None
+
+    if KAKAO_PF_INDEX_FILE.exists():
+        try:
+            data = json.loads(KAKAO_PF_INDEX_FILE.read_text(encoding="utf-8"))
+            cached_posts = data.get("posts", [])
+            last_sort = data.get("last_sort")
+            print(f"  Kakao PF 캐시 로드: {len(cached_posts)}개 포스트")
+        except (json.JSONDecodeError, KeyError) as exc:
+            print(f"  Kakao PF 캐시 파싱 실패 ({exc}), 전체 재수집")
+            cached_posts = []
+            last_sort = None
+
+    # ── 새 포스트 fetch ───────────────────────────────────────────────────
+    new_posts: list[dict] = []
+    cursor: str | None = None
+    page = 0
+
+    while True:
+        params: dict[str, str] = {"includePinnedPost": "true"}
+        if cursor:
+            params["since"] = cursor
+        try:
+            resp = fetch_with_retry(KAKAO_PF_API, params=params, timeout=15)
+        except Exception:
+            resp = None
+        if not resp:
+            print(f"  Kakao PF API 요청 실패 (page {page}), 중단")
+            break
+
+        try:
+            body = resp.json()
+        except Exception:
+            print(f"  Kakao PF JSON 파싱 실패 (page {page}), 중단")
+            break
+
+        items = body.get("items", [])
+        if not items:
+            break
+
+        for item in items:
+            sort_val = str(item.get("sort", ""))
+            # 캐시에 이미 있는 포스트에 도달하면 중단
+            if last_sort and sort_val <= last_sort:
+                items = []  # 아래 break 조건 트리거
+                break
+            new_posts.append({
+                "id": item["id"],
+                "title": item.get("title", ""),
+                "published_at": item.get("published_at", 0),
+                "media_urls": _extract_media_urls(item.get("media") or []),
+                "sort": sort_val,
+            })
+
+        if not items or not body.get("has_next"):
+            break
+
+        cursor = str(items[-1].get("sort", "")) if items else None
+        if not cursor:
+            break
+        page += 1
+        time.sleep(0.2)  # rate limiting
+
+    if new_posts:
+        print(f"  Kakao PF 새 포스트: {len(new_posts)}개 수집")
+
+    # ── 캐시 병합 및 저장 ─────────────────────────────────────────────────
+    all_raw = new_posts + cached_posts
+    # sort 기준 내림차순 정렬 (최신 먼저)
+    all_raw.sort(key=lambda p: p.get("sort", ""), reverse=True)
+    # 중복 제거 (id 기준)
+    seen_ids: set[int] = set()
+    deduped: list[dict] = []
+    for p in all_raw:
+        if p["id"] not in seen_ids:
+            seen_ids.add(p["id"])
+            deduped.append(p)
+
+    # 캐시 파일 저장
+    new_last_sort = deduped[0]["sort"] if deduped else last_sort
+    try:
+        KAKAO_PF_INDEX_FILE.parent.mkdir(parents=True, exist_ok=True)
+        KAKAO_PF_INDEX_FILE.write_text(
+            json.dumps(
+                {"last_sort": new_last_sort, "posts": deduped},
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+    except Exception as exc:
+        print(f"  Kakao PF 캐시 저장 실패: {exc}")
+
+    # ── date → [KakaoPFPost] 인덱스 구축 ─────────────────────────────────
+    date_index: dict[str, list[KakaoPFPost]] = {}
+    for p in deduped:
+        pub = p.get("published_at", 0)
+        if not pub:
+            continue
+        date_str = _ms_to_date(pub)
+        entry = KakaoPFPost(
+            id=p["id"],
+            title=p.get("title", ""),
+            published_at=pub,
+            media_urls=p.get("media_urls", []),
+        )
+        date_index.setdefault(date_str, []).append(entry)
+
+    return date_index
+
+
+def _match_kakao_pf_post(
+    candidates: list[KakaoPFPost],
+    blog_title: str,
+) -> KakaoPFPost | None:
+    """같은 날짜의 Kakao PF 후보 중 블로그 제목과 가장 유사한 포스트를 선택한다."""
+    if not candidates:
+        return None
+    if len(candidates) == 1:
+        return candidates[0]
+
+    best: KakaoPFPost | None = None
+    best_ratio = 0.0
+    for kp in candidates:
+        ratio = difflib.SequenceMatcher(None, blog_title, kp.title).ratio()
+        if ratio > best_ratio:
+            best_ratio = ratio
+            best = kp
+
+    # 유사도가 너무 낮으면 skip (0.3 미만)
+    if best_ratio < 0.3:
+        return None
+    return best
+
+
+def _fetch_kakao_pf_image(
+    post_url: str,
+    img_url: str,
+    post_date: str,
+    utype: str,
+    idx: int,
+    kakao_pf_index: dict[str, list[KakaoPFPost]],
+    blog_title: str = "",
+) -> tuple[bytes, str, str, str, str] | None:
+    """Kakao PF 포스트에서 이미지를 탐색하는 폴백 함수.
+
+    Returns:
+        성공 시 (content, final_url, content_type, cd, kakao_permalink) 5-tuple.
+    """
+    candidates = kakao_pf_index.get(post_date)
+    if not candidates:
+        return None
+
+    kp = _match_kakao_pf_post(candidates, blog_title)
+    if not kp:
+        return None
+
+    # 이미지 매칭: og_image → 첫 번째, img → position 기반
+    if not kp.media_urls:
+        return None
+
+    if utype == "og_image":
+        target_url = kp.media_urls[0]
+    elif utype == "img":
+        # idx는 1-based, og_image가 있으면 idx-1이 media_urls 인덱스
+        # 하지만 Kakao PF에서는 og_image가 별도로 없으므로 idx-1 사용
+        media_idx = idx - 1
+        if media_idx < 0 or media_idx >= len(kp.media_urls):
+            return None
+        target_url = kp.media_urls[media_idx]
+    else:
+        # gdrive, linked_keyword 등은 position 기반으로 시도
+        media_idx = idx - 1
+        if media_idx < 0 or media_idx >= len(kp.media_urls):
+            return None
+        target_url = kp.media_urls[media_idx]
+
+    payload = _fetch_image(target_url)
+    if payload is None:
+        return None
+
+    permalink = f"http://pf.kakao.com/{KAKAO_PF_PROFILE}/{kp.id}"
+    return (*payload, permalink)
+
+
+# ---------------------------------------------------------------------------
 # 이미지 URL 수집
 # ---------------------------------------------------------------------------
 
@@ -862,6 +1325,19 @@ def _determine_filename(
 # ---------------------------------------------------------------------------
 
 
+def _save_alternative_image(
+    content: bytes,
+    filename: str,
+    folder: Path,
+) -> str | None:
+    """alternative 이미지를 primary와 같은 폴더에 저장하고 상대 경로를 반환한다."""
+    folder.mkdir(parents=True, exist_ok=True)
+    safe_name = _safe_filename(filename)
+    with _save_lock:
+        saved = save_image(content, safe_name, folder)
+    return (folder / saved).relative_to(ROOT_DIR).as_posix()
+
+
 def download_one_image(
     img_url: str,
     utype: str,
@@ -874,6 +1350,13 @@ def download_one_image(
     thumb_hashes: set[str],
     hash_dup_count: dict[str, int],
     post_soup_cache: dict[str, tuple[BeautifulSoup, str] | None] | None = None,
+    *,
+    post_date: str = "",
+    blog_title: str = "",
+    multilang_fallback: bool = False,
+    multilang_date_index: dict[str, list[tuple[str, str]]] | None = None,
+    kakao_pf_fallback: bool = False,
+    kakao_pf_index: dict[str, list[KakaoPFPost]] | None = None,
 ) -> bool:
     seen_key = _seen_key(utype, img_url)
 
@@ -909,6 +1392,48 @@ def download_one_image(
         payload = _fetch_image(img_url, allow_ext_fallback=True)
         if payload is None and _is_community_cdn(img_url):
             payload = _fetch_wayback_image(img_url, allow_ext_fallback=True)
+
+    # ── Kakao PF 폴백 (retry 모드 전용) ──────────────────────────────────
+    kakao_pf_result: tuple[bytes, str, str, str, str] | None = None
+    if payload is None and kakao_pf_fallback and utype != "linked_direct":
+        kakao_pf_result = _fetch_kakao_pf_image(
+            post_url, img_url, post_date, utype, idx,
+            kakao_pf_index or {}, blog_title=blog_title,
+        )
+
+    # ── 다국어 Wayback 폴백 (retry 모드 전용) ────────────────────────────
+    multilang_result: tuple[bytes, str, str, str, str] | None = None
+    if payload is None and multilang_fallback and utype != "linked_direct":
+        multilang_result = _fetch_multilang_wayback_image(
+            post_url, img_url, post_date, utype, idx,
+            multilang_date_index or {}, post_soup_cache,
+        )
+
+    # ── 폴백 결과 선택 ────────────────────────────────────────────────────
+    primary_source: str | None = None
+    alt_result: tuple[bytes, str, str, str, str] | None = None
+    alt_source: str | None = None
+
+    if payload is None and kakao_pf_result and multilang_result:
+        # 둘 다 성공 → 파일 크기 큰 쪽이 primary, 작은 쪽이 alternative
+        kp_size = len(kakao_pf_result[0])
+        ml_size = len(multilang_result[0])
+        if kp_size >= ml_size:
+            payload = kakao_pf_result[:4]
+            primary_source = kakao_pf_result[4]  # kakao permalink
+            alt_result = multilang_result
+            alt_source = multilang_result[4]  # multilang post url
+        else:
+            payload = multilang_result[:4]
+            primary_source = multilang_result[4]
+            alt_result = kakao_pf_result
+            alt_source = kakao_pf_result[4]  # kakao permalink
+    elif payload is None and kakao_pf_result:
+        payload = kakao_pf_result[:4]
+        primary_source = kakao_pf_result[4]
+    elif payload is None and multilang_result:
+        payload = multilang_result[:4]
+        primary_source = multilang_result[4]
 
     if payload is None:
         record_failed(post_url, img_url, "download_failed")
@@ -962,6 +1487,34 @@ def download_one_image(
         _img_hash_buf.add(f"{content_hash}\t{rel}\t{'T' if is_thumb else ''}")
 
     _done_buf.add(seen_key)
+    primary_rel = rel if should_save else existing_rel  # type: ignore[possibly-undefined]
+
+    # ── Alternative 이미지 저장 ───────────────────────────────────────────
+    if alt_result is not None:
+        alt_content = alt_result[0]
+        alt_hash = _sha256_bytes(alt_content)
+        # primary와 동일 해시이면 skip
+        if alt_hash != content_hash:
+            alt_filename = _determine_filename(
+                utype, img_url, alt_result[1], alt_result[2], alt_result[3], idx
+            )
+            alt_rel = _save_alternative_image(alt_content, alt_filename, folder)
+            # alt 로그 기록
+            if alt_rel and alt_source:
+                if alt_source.startswith("http://pf.kakao.com/"):
+                    _kakao_pf_log_buf.add(f"{alt_rel}\t{post_url}\t{alt_source}")
+                else:
+                    _multilang_log_buf.add(f"{alt_rel}\t{post_url}\t{alt_source}")
+
+    # ── 폴백 성공 로그 기록 ───────────────────────────────────────────────
+    if primary_source is not None and primary_rel:
+        if kakao_pf_result and primary_source == kakao_pf_result[4]:
+            # primary가 Kakao PF
+            _kakao_pf_log_buf.add(f"{primary_rel}\t{post_url}\t{primary_source}")
+        elif multilang_result and primary_source == multilang_result[4]:
+            # primary가 multilang
+            _multilang_log_buf.add(f"{primary_rel}\t{post_url}\t{primary_source}")
+
     return True
 
 
@@ -980,6 +1533,11 @@ def process_post(
     hash_dup_count: dict[str, int],
     done_post_urls: set[str],
     html_index: "dict[str, Path] | None" = None,
+    *,
+    multilang_fallback: bool = False,
+    multilang_date_index: dict[str, list[tuple[str, str]]] | None = None,
+    kakao_pf_fallback: bool = False,
+    kakao_pf_index: dict[str, list[KakaoPFPost]] | None = None,
 ) -> PostProcessResult:
     # 이미 모든 이미지가 완료된 포스트는 HTTP fetch 없이 즉시 스킵
     if post_url in done_post_urls:
@@ -992,6 +1550,17 @@ def process_post(
 
     soup = BeautifulSoup(html_text, "lxml")
     images = collect_image_urls(soup, post_url)
+
+    # 블로그 포스트 제목 추출 (Kakao PF 매칭용)
+    blog_title = ""
+    if kakao_pf_fallback:
+        title_tag = soup.find("title")
+        if title_tag and title_tag.string:
+            blog_title = title_tag.string.strip()
+        else:
+            h1 = soup.find("h1")
+            if h1:
+                blog_title = h1.get_text(strip=True)
 
     # 카테고리 추출 → 저장 경로 결정
     category = extract_category(soup)
@@ -1017,6 +1586,12 @@ def process_post(
             thumb_hashes,
             hash_dup_count,
             post_soup_cache=post_soup_cache,
+            post_date=post_date,
+            blog_title=blog_title,
+            multilang_fallback=multilang_fallback,
+            multilang_date_index=multilang_date_index,
+            kakao_pf_fallback=kakao_pf_fallback,
+            kakao_pf_index=kakao_pf_index,
         ):
             ok += 1
         else:
@@ -1178,6 +1753,23 @@ def run_images(
             print("[이미지] 재처리 대상이 없습니다.")
             return
 
+    # 다국어 Wayback 폴백 (retry 모드에서만 활성화)
+    multilang_fallback = retry_mode
+    multilang_date_index: dict[str, list[tuple[str, str]]] = {}
+    if multilang_fallback:
+        print("[이미지] 다국어 Wayback 폴백 활성화: EN/JA 사이트맵 인덱스 구축 중...")
+        multilang_date_index = _build_multilang_date_index()
+
+    # Kakao PF 폴백 (retry 모드에서만 활성화)
+    kakao_pf_fallback = retry_mode
+    kakao_pf_index: dict[str, list[KakaoPFPost]] = {}
+    if kakao_pf_fallback:
+        print("[이미지] Kakao PF 폴백 활성화: 게시글 인덱스 구축 중...")
+        kakao_pf_index = _build_kakao_pf_index()
+        if kakao_pf_index:
+            total_kp = sum(len(v) for v in kakao_pf_index.values())
+            print(f"  Kakao PF 인덱스: {len(kakao_pf_index)}일, 총 {total_kp}개 포스트")
+
     total = len(posts)
     # 대상 수가 100개 이하면 10개 단위, 초과면 50개 단위로 진행도 출력
     report_interval = 10 if total <= 100 else 50
@@ -1193,6 +1785,10 @@ def run_images(
                 process_post, url, date, seen_urls, img_hashes, image_map,
                 thumb_hashes, hash_dup_count, done_post_urls,
                 html_index=html_index,
+                multilang_fallback=multilang_fallback,
+                multilang_date_index=multilang_date_index,
+                kakao_pf_fallback=kakao_pf_fallback,
+                kakao_pf_index=kakao_pf_index,
             ): (url, date)
             for url, date in posts
         }
@@ -1223,6 +1819,8 @@ def run_images(
     _map_buf.flush_all()
     _img_hash_buf.flush_all()
     _done_posts_buf.flush_all()
+    _multilang_log_buf.flush_all()
+    _kakao_pf_log_buf.flush_all()
 
     # Phase 2: 재사용 이미지를 카테고리 루트로 이동
     if hash_dup_count:
