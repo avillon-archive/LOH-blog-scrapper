@@ -220,6 +220,10 @@ def main():
     parser.add_argument("--md", action="store_true", help="MD만 처리")
     parser.add_argument("--html", action="store_true", help="HTML만 처리")
     parser.add_argument("--retry", action="store_true", help="실패 목록 재처리")
+    parser.add_argument("--retry-multilang", action="store_true",
+                        help="KakaoPF 성공 이미지에 multilang alt 보충")
+    parser.add_argument("--retry-kakaopf", action="store_true",
+                        help="multilang 성공 이미지에 KakaoPF alt 보충")
     parser.add_argument(
         "--posts",
         action="store_true",
@@ -361,7 +365,10 @@ def main():
         elif step == "images":
             print("▶ 이미지 다운로드 시작")
             print("━" * 60)
-            run_images(posts, retry_mode=args.retry, force_download=force_download,
+            run_images(posts, retry_mode=args.retry,
+                       retry_multilang=args.retry_multilang,
+                       retry_kakaopf=args.retry_kakaopf,
+                       force_download=force_download,
                        html_index=html_index, max_workers=max_workers)
         elif step == "md":
             print("▶ MD 파일 저장 시작")

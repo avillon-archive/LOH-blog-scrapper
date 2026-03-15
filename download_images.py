@@ -795,19 +795,15 @@ def _multilang_image_url_candidates(img_url: str) -> list[tuple[str, str]]:
 
 
 def _build_multilang_date_index() -> dict[str, list[tuple[str, str]]]:
-    """EN/JA 사이트맵의 Wayback 스냅샷을 가져와 {date: [(post_url, lang), ...]} 인덱스를 구축한다."""
+    """EN/JA 사이트맵을 직접 가져와 {date: [(post_url, lang), ...]} 인덱스를 구축한다."""
     from build_posts_list import parse_sitemap
 
     date_index: dict[str, list[tuple[str, str]]] = {}
 
     for lang, lang_host in MULTILANG_BLOG_HOSTS.items():
         sitemap_url = f"https://{lang_host}/sitemap-posts.xml"
-        wayback_url = _wayback_oldest(sitemap_url)
-        if not wayback_url:
-            print(f"  [{lang.upper()}] 사이트맵 Wayback 스냅샷 없음, 건너뜀")
-            continue
 
-        resp = fetch_with_retry(wayback_url, allow_redirects=True, timeout=30)
+        resp = fetch_with_retry(sitemap_url, allow_redirects=True, timeout=30)
         if not resp:
             print(f"  [{lang.upper()}] 사이트맵 fetch 실패, 건너뜀")
             continue
@@ -1321,17 +1317,256 @@ def _determine_filename(
 
 
 # ---------------------------------------------------------------------------
+# 기존 폴백 이미지 일괄 rename (출처 접두사 부여)
+# ---------------------------------------------------------------------------
+
+
+def _rename_fallback_images() -> int:
+    """기존 폴백 로그에 기록된 이미지 파일에 출처 접두사가 없으면 rename한다.
+
+    Returns:
+        rename된 파일 수.
+    """
+    renamed = 0
+    for log_file, default_tag in [
+        (KAKAO_PF_LOG_FILE, "[Kakao]"),
+        (MULTILANG_LOG_FILE, None),
+    ]:
+        if not log_file.exists():
+            continue
+        lines = log_file.read_text(encoding="utf-8").splitlines()
+        new_lines: list[str] = []
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            parts = line.split("\t")
+            if len(parts) < 3:
+                new_lines.append(line)
+                continue
+            rel_path, post_url, source = parts[0], parts[1], parts[2]
+
+            basename = Path(rel_path).name
+            if basename.startswith("["):
+                new_lines.append(line)
+                continue
+
+            tag = default_tag if default_tag else _source_tag(source)
+            if not tag:
+                new_lines.append(line)
+                continue
+
+            old_path = ROOT_DIR / rel_path
+            new_name = f"{tag} {basename}"
+            new_path = old_path.parent / _safe_filename(new_name)
+            if old_path.exists() and not new_path.exists():
+                old_path.rename(new_path)
+                new_rel = new_path.relative_to(ROOT_DIR).as_posix()
+                new_lines.append(f"{new_rel}\t{post_url}\t{source}")
+                renamed += 1
+            else:
+                new_lines.append(line)
+
+        log_file.write_text("\n".join(new_lines) + ("\n" if new_lines else ""),
+                            encoding="utf-8")
+    return renamed
+
+
+# ---------------------------------------------------------------------------
+# Alt 이미지 보충 (--retry-multilang / --retry-kakaopf)
+# ---------------------------------------------------------------------------
+
+
+def _supplement_alt_images(
+    mode: str,
+    posts: list[tuple[str, str]],
+    html_index: "dict[str, Path] | None" = None,
+    max_workers: int = DEFAULT_MAX_WORKERS,
+) -> None:
+    """한쪽 폴백만 성공한 이미지에 반대쪽 alt를 보충한다.
+
+    Args:
+        mode: "multilang" (KakaoPF 성공 → multilang alt 보충)
+              또는 "kakaopf" (multilang 성공 → KakaoPF alt 보충).
+    """
+
+    if mode == "multilang":
+        src_log = KAKAO_PF_LOG_FILE
+        dst_log_buf = _multilang_log_buf
+        label = "multilang"
+    elif mode == "kakaopf":
+        src_log = MULTILANG_LOG_FILE
+        dst_log_buf = _kakao_pf_log_buf
+        label = "KakaoPF"
+    else:
+        print(f"[보충] 알 수 없는 모드: {mode}")
+        return
+
+    if not src_log.exists():
+        print(f"[보충] 소스 로그 파일 없음: {src_log}")
+        return
+
+    # 소스 로그에서 post_url → [rel_path, ...] 매핑
+    log_entries: dict[str, list[str]] = {}
+    for line in src_log.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        parts = line.split("\t")
+        if len(parts) < 3:
+            continue
+        rel_path, post_url, _source = parts[0], parts[1], parts[2]
+        log_entries.setdefault(post_url, []).append(rel_path)
+
+    if not log_entries:
+        print(f"[보충] 소스 로그에 항목 없음")
+        return
+
+    # posts에서 date 매핑
+    post_date_map = {url: date for url, date in posts}
+    target_posts = [(url, post_date_map.get(url, "")) for url in log_entries
+                    if url in post_date_map]
+
+    if not target_posts:
+        print(f"[보충] 대상 포스트 없음")
+        return
+
+    print(f"[보충] {label} alt 보충 대상: {len(target_posts)}개 포스트")
+
+    # 보충 인덱스 구축
+    if mode == "multilang":
+        print(f"[보충] 다국어 사이트맵 인덱스 구축 중...")
+        multilang_date_index = _build_multilang_date_index()
+        kakao_pf_index: dict[str, list[KakaoPFPost]] = {}
+    else:
+        print(f"[보충] Kakao PF 인덱스 구축 중...")
+        multilang_date_index: dict[str, list[tuple[str, str]]] = {}
+        kakao_pf_index = _build_kakao_pf_index()
+        if kakao_pf_index:
+            total_kp = sum(len(v) for v in kakao_pf_index.values())
+            print(f"  Kakao PF 인덱스: {len(kakao_pf_index)}일, 총 {total_kp}개 포스트")
+
+    start = time.time()
+    total_supplemented = 0
+    completed = 0
+
+    def _process_one_post(post_url: str, post_date: str) -> int:
+        """단일 포스트의 alt 보충. 보충 성공 수를 반환한다."""
+        html_text = fetch_post_html(post_url, html_index)
+        if html_text is None:
+            return 0
+
+        soup = BeautifulSoup(html_text, "lxml")
+        images = collect_image_urls(soup, post_url)
+
+        blog_title = ""
+        if mode == "kakaopf":
+            title_tag = soup.find("title")
+            if title_tag and title_tag.string:
+                blog_title = title_tag.string.strip()
+            else:
+                h1 = soup.find("h1")
+                if h1:
+                    blog_title = h1.get_text(strip=True)
+
+        category = extract_category(soup)
+        date_folder = date_to_folder(post_date)
+        if category:
+            folder = IMAGES_DIR / category / date_folder
+        else:
+            folder = IMAGES_DIR / date_folder
+
+        logged_rels = set(log_entries.get(post_url, []))
+        post_soup_cache: dict[str, tuple[BeautifulSoup, str] | None] = {}
+        count = 0
+
+        for idx, (img_url, utype) in enumerate(images, start=1):
+            if utype == "linked_direct":
+                continue
+
+            # 이 이미지에 해당하는 로그 항목이 있는지 확인
+            # 로그의 rel_path와 실제 저장 경로를 비교하기 어려우므로
+            # 포스트 내 모든 이미지에 대해 보충 시도
+            if mode == "multilang":
+                result = _fetch_multilang_wayback_image(
+                    post_url, img_url, post_date, utype, idx,
+                    multilang_date_index, post_soup_cache,
+                )
+            else:
+                result = _fetch_kakao_pf_image(
+                    post_url, img_url, post_date, utype, idx,
+                    kakao_pf_index, blog_title=blog_title,
+                )
+
+            if result is None:
+                continue
+
+            alt_content = result[0]
+            alt_source = result[4]
+            tag = _source_tag(alt_source)
+            alt_filename = _determine_filename(
+                utype, img_url, result[1], result[2], result[3], idx
+            )
+            alt_rel = _save_alternative_image(alt_content, alt_filename, folder,
+                                              source_tag=tag)
+            if alt_rel:
+                dst_log_buf.add(f"{alt_rel}\t{post_url}\t{alt_source}")
+                count += 1
+
+        return count
+
+    report_interval = 10 if len(target_posts) <= 100 else 50
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_to_post = {
+            executor.submit(_process_one_post, url, date): url
+            for url, date in target_posts
+        }
+        for future in as_completed(future_to_post):
+            try:
+                count = future.result()
+            except Exception as exc:
+                post_url = future_to_post[future]
+                print(f"  [오류] {post_url}: {exc}")
+                count = 0
+            total_supplemented += count
+            completed += 1
+            if completed % report_interval == 0 or completed == len(target_posts):
+                elapsed = time.time() - start
+                print(f"  {completed}/{len(target_posts)} "
+                      f"({elapsed:.0f}s) 보충={total_supplemented}")
+
+    dst_log_buf.flush_all()
+    print(f"\n[보충 완료] {label} alt {total_supplemented}개 이미지 보충")
+
+
+# ---------------------------------------------------------------------------
 # 단일 이미지 다운로드 (스레드 안전)
 # ---------------------------------------------------------------------------
+
+
+def _source_tag(source_url: str) -> str:
+    """폴백 소스 URL로부터 출처 접두사를 결정한다."""
+    if source_url.startswith("http://pf.kakao.com/"):
+        return "[Kakao]"
+    if "blog-en" in source_url:
+        return "[EN]"
+    if "blog-ja" in source_url:
+        return "[JA]"
+    return ""
 
 
 def _save_alternative_image(
     content: bytes,
     filename: str,
     folder: Path,
+    source_tag: str = "",
 ) -> str | None:
     """alternative 이미지를 primary와 같은 폴더에 저장하고 상대 경로를 반환한다."""
     folder.mkdir(parents=True, exist_ok=True)
+    if source_tag:
+        stem = Path(filename).stem
+        suffix = Path(filename).suffix
+        filename = f"{source_tag} {stem}{suffix}"
     safe_name = _safe_filename(filename)
     with _save_lock:
         saved = save_image(content, safe_name, folder)
@@ -1443,6 +1678,13 @@ def download_one_image(
     filename = _determine_filename(
         utype, img_url, final_url, content_type, content_disposition, idx
     )
+    # 폴백 소스인 경우 파일명에 출처 접두사 추가
+    if primary_source is not None:
+        tag = _source_tag(primary_source)
+        if tag:
+            stem = Path(filename).stem
+            suffix = Path(filename).suffix
+            filename = f"{tag} {stem}{suffix}"
     safe_name = _safe_filename(filename)
 
     # ── Phase 1: in-memory 상태 예약 (_state_lock, 극히 빠름) ────────────
@@ -1498,7 +1740,9 @@ def download_one_image(
             alt_filename = _determine_filename(
                 utype, img_url, alt_result[1], alt_result[2], alt_result[3], idx
             )
-            alt_rel = _save_alternative_image(alt_content, alt_filename, folder)
+            alt_tag = _source_tag(alt_source) if alt_source else ""
+            alt_rel = _save_alternative_image(alt_content, alt_filename, folder,
+                                              source_tag=alt_tag)
             # alt 로그 기록
             if alt_rel and alt_source:
                 if alt_source.startswith("http://pf.kakao.com/"):
@@ -1729,6 +1973,8 @@ def _relocate_shared_images(
 def run_images(
     posts: list[tuple[str, str]],
     retry_mode: bool = False,
+    retry_multilang: bool = False,
+    retry_kakaopf: bool = False,
     force_download: bool = False,
     html_index: "dict[str, Path] | None" = None,
     max_workers: int = DEFAULT_MAX_WORKERS,
@@ -1736,6 +1982,20 @@ def run_images(
     ensure_utf8_console()
     ROOT_DIR.mkdir(parents=True, exist_ok=True)
     IMAGES_DIR.mkdir(parents=True, exist_ok=True)
+
+    # 기존 폴백 이미지에 출처 접두사 부여
+    fb_renamed = _rename_fallback_images()
+    if fb_renamed:
+        print(f"[이미지] 기존 폴백 이미지 {fb_renamed}개 rename (출처 접두사 추가)")
+
+    # Alt 이미지 보충 모드
+    if retry_multilang:
+        _supplement_alt_images("multilang", posts, html_index, max_workers)
+    if retry_kakaopf:
+        _supplement_alt_images("kakaopf", posts, html_index, max_workers)
+    if retry_multilang or retry_kakaopf:
+        return
+
     seen_urls = load_seen(DONE_FILE)
     img_hashes, thumb_hashes = _load_or_build_img_hashes()
     hash_dup_count: dict[str, int] = {}
@@ -1836,6 +2096,10 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Image downloader")
     parser.add_argument("--retry", action="store_true", help="Retry failed list")
+    parser.add_argument("--retry-multilang", action="store_true",
+                        help="KakaoPF 성공 이미지에 multilang alt 보충")
+    parser.add_argument("--retry-kakaopf", action="store_true",
+                        help="multilang 성공 이미지에 KakaoPF alt 보충")
     parser.add_argument("--posts", default=str(ROOT_DIR / "all_links.txt"), help="Posts list file")
     parser.add_argument("--backfill-map", action="store_true", help="Backfill image_map.tsv")
     args = parser.parse_args()
@@ -1844,4 +2108,6 @@ if __name__ == "__main__":
         backfill_image_map()
     else:
         posts = load_posts(args.posts)
-        run_images(posts, retry_mode=args.retry)
+        run_images(posts, retry_mode=args.retry,
+                   retry_multilang=args.retry_multilang,
+                   retry_kakaopf=args.retry_kakaopf)
