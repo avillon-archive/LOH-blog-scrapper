@@ -72,7 +72,9 @@ python3 build_posts_list.py             # all_posts.txt / all_pages.txt / all_li
   images/카테고리명/YYYY/MM/  ← 본문 이미지 (카테고리·날짜별 폴더, 고유 이미지)
   images/카테고리명/          ← 재사용 일반 이미지 (해시 중복 2+회 출현)
   images/카테고리명/thumbnails/ ← 재사용 썸네일 (해시 중복 2+회 출현)
-  images/YYYY/MM/            ← 카테고리 없는 본문 이미지 (고유)
+  images/etc/YYYY/MM/        ← 카테고리 없는 본문 이미지 (고유)
+  images/common/             ← 카테고리 없는 재사용 일반 이미지
+  images/common/thumbnails/  ← 카테고리 없는 재사용 썸네일
   images/multilang_fallback.tsv ← 다국어 Wayback 폴백 성공 로그
   images/kakao_pf_log.tsv    ← Kakao PF 폴백 성공 로그
   md/                        ← 카테고리 없는 MD 파일
@@ -95,7 +97,7 @@ MD 파일 내 이미지 참조는 MD 파일 위치 기준 상대경로. `img_pre
 
 | MD 파일 위치 | depth | img_prefix | 실제 경로 |
 |---|---|---|---|
-| `md/slug.md` | 1 | `../` | `../images/YYYY/MM/x.png` |
+| `md/slug.md` | 1 | `../` | `../images/etc/YYYY/MM/x.png` |
 | `md/카테고리/slug.md` | 2 | `../../` | `../../images/카테고리/YYYY/MM/x.png` |
 
 `image_map.tsv`에 없는 이미지는 절대 URL로 폴백. 썸네일(`og_image`)도 `image_map.tsv`에 기록한다.

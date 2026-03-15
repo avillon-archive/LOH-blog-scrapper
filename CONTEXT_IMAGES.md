@@ -151,11 +151,11 @@ class KakaoPFPost(NamedTuple):
 
 ## 2단계 처리 흐름
 
-**Phase 1 (다운로드)**: `process_post()`에서 `extract_category(soup)` 호출 → `images/{category}/{YYYY}/{MM}/`에 저장. 일반 이미지·썸네일 모두 SHA-256 해시 기반 중복 체크 (`img_hashes: dict[str, str]`). 해시 중복 시 저장 생략, `image_map`에 기존 경로 매핑. 중복 횟수는 `hash_dup_count`로 추적.
+**Phase 1 (다운로드)**: `process_post()`에서 `extract_category(soup)` 호출 → `images/{category}/{YYYY}/{MM}/`에 저장 (카테고리 없으면 `images/etc/{YYYY}/{MM}/`). 일반 이미지·썸네일 모두 SHA-256 해시 기반 중복 체크 (`img_hashes: dict[str, str]`). 해시 중복 시 저장 생략, `image_map`에 기존 경로 매핑. 중복 횟수는 `hash_dup_count`로 추적.
 
 **Phase 2 (후처리)**: `_relocate_shared_images()` — `hash_dup_count`에서 재사용 이미지 식별 후 카테고리 루트로 이동:
-- 일반 이미지 → `images/{category}/`
-- 썸네일 → `images/{category}/thumbnails/`
+- 일반 이미지 → `images/{category}/` (카테고리 없으면 `images/common/`)
+- 썸네일 → `images/{category}/thumbnails/` (카테고리 없으면 `images/common/thumbnails/`)
 - `image_map.tsv`, `image_hashes.tsv` 경로 자동 갱신. 빈 디렉토리 정리.
 
 ---

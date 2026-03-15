@@ -1903,10 +1903,7 @@ def process_post(
     # 카테고리 추출 → 저장 경로 결정
     category = extract_category(soup)
     date_folder = date_to_folder(post_date)
-    if category:
-        folder = IMAGES_DIR / category / date_folder
-    else:
-        folder = IMAGES_DIR / date_folder
+    folder = IMAGES_DIR / (category or "etc") / date_folder
 
     ok = fail = ok_original = ok_multilang = ok_kakao = 0
     post_soup_cache: dict[str, tuple[BeautifulSoup, str] | None] = {}
@@ -1970,9 +1967,8 @@ def _relocate_shared_images(
 ) -> int:
     """해시 중복이 발생한(재사용) 이미지를 카테고리 루트로 이동한다.
 
-    - 일반 이미지 → images/{category}/
-    - 썸네일     → images/{category}/thumbnails/
-    - 카테고리 없는 경우 → images/ 또는 images/thumbnails/
+    - 일반 이미지 → images/{category}/ (카테고리 없으면 images/common/)
+    - 썸네일     → images/{category}/thumbnails/ (카테고리 없으면 images/common/thumbnails/)
 
     Returns:
         이동된 파일 수.
@@ -1995,20 +1991,14 @@ def _relocate_shared_images(
             # 이미 카테고리 루트에 있거나 패턴 불일치 → 스킵
             continue
 
-        category = m.group(1) or ""  # 카테고리 없으면 ""
+        category = m.group(1) or "common"  # 카테고리 없으면 "common"
         filename = Path(old_rel).name
         is_thumb = content_hash in thumb_hashes
 
         if is_thumb:
-            if category:
-                new_dir = IMAGES_DIR / category / "thumbnails"
-            else:
-                new_dir = IMAGES_DIR / "thumbnails"
+            new_dir = IMAGES_DIR / category / "thumbnails"
         else:
-            if category:
-                new_dir = IMAGES_DIR / category
-            else:
-                new_dir = IMAGES_DIR
+            new_dir = IMAGES_DIR / category
 
         new_rel = (new_dir / filename).relative_to(ROOT_DIR).as_posix()
         if new_rel == old_rel:
