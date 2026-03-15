@@ -2,6 +2,8 @@
 
 `blog-ko.lordofheroes.com` 전체 포스트(사이트맵 기준 약 2,200개)의 이미지·MD·HTML을 로컬에 저장하는 Python 스크래퍼.
 
+> 모듈별 상세 문서: [CONTEXT_UTILS.md](CONTEXT_UTILS.md) · [CONTEXT_HTML.md](CONTEXT_HTML.md) · [CONTEXT_IMAGES.md](CONTEXT_IMAGES.md) · [CONTEXT_MD.md](CONTEXT_MD.md) · [CONTEXT_RUN.md](CONTEXT_RUN.md)
+
 ---
 
 ## 인코딩 설정
@@ -14,11 +16,11 @@
 
 | 파일 | 역할 |
 |------|------|
-| `utils.py` | 공통 유틸 (세션, 재시도, 파일 I/O, `url_to_slug`, `VALID_CATEGORIES`, `extract_category`, `FailedLog`, `write_text_unique`, `run_pipeline`) |
-| `download_images.py` | 이미지 다운로드 (`ImageFailedLog` 클래스로 실패 이력 관리) |
+| `utils.py` | 공통 유틸 (세션, 재시도, 파일 I/O, rate limiter, `url_to_slug`, `VALID_CATEGORIES`, `extract_category`, `FailedLog`, `write_text_unique`, `run_pipeline`, `LineBuffer`, `build_html_index`, `fetch_post_html`) |
+| `download_images.py` | 이미지 다운로드 (`ImageFailedLog` 클래스로 실패 이력 관리, 다국어·Kakao PF 폴백 포함) |
 | `download_md.py` | HTML → MD 변환·저장 |
 | `download_html.py` | 원문 HTML 저장 |
-| `run_all.py` | 마스터 실행 스크립트 (실행 전 `all_links.txt` 자동 갱신 포함) |
+| `run_all.py` | 마스터 실행 스크립트 (실행 전 사이트맵 자동 갱신 포함) |
 | `build_posts_list.py` | 사이트맵 파싱 → `loh_blog/all_posts.txt` / `all_pages.txt` / `all_links.txt` 생성 |
 | `loh_blog/all_posts.txt` | sitemap-posts.xml URL+날짜 (`URL\tYYYY-MM-DD`, 날짜 **내림차순**) |
 | `loh_blog/all_pages.txt` | sitemap-pages.xml URL+날짜 (`URL\tYYYY-MM-DD`, 날짜 **내림차순**) |
@@ -36,23 +38,23 @@
 pip install requests beautifulsoup4 lxml
 
 python3 run_all.py                      # images + md + html 전체 (all_links.txt 자동 갱신)
-python3 run_all.py --images             # 이미지만
-python3 run_all.py --md                 # MD만
+python3 run_all.py --images             # 이미지만 (html 항상 포함)
+python3 run_all.py --md                 # MD만 (html 항상 포함)
 python3 run_all.py --html               # HTML만
 python3 run_all.py --retry              # 실패 목록 재처리
 python3 run_all.py --sample 10          # 랜덤 10개 테스트 (all_links.txt 행 수의 10% 상한)
 python3 run_all.py --sample 10 --retry  # 실패 목록에서 10개
-python3 run_all.py --posts              # all_posts.txt 소스 사용 (사이트맵 갱신 건너뜀)
+python3 run_all.py --posts              # all_posts.txt 소스 사용 (해당 사이트맵 개별 갱신 체크)
 python3 run_all.py --posts --md         # all_posts.txt 대상 MD만
-python3 run_all.py --pages              # all_pages.txt 소스 사용 (사이트맵 갱신 건너뜀)
+python3 run_all.py --pages              # all_pages.txt 소스 사용 (해당 사이트맵 개별 갱신 체크)
 python3 run_all.py --pages --images     # all_pages.txt 대상 이미지만
-python3 run_all.py --custom             # custom_posts.txt 소스 사용 (사이트맵 갱신 건너뜀)
+python3 run_all.py --custom             # custom_posts.txt 소스 사용 (사이트맵 갱신 건너뜀, 강제 재다운로드)
 python3 run_all.py --custom --md        # custom_posts.txt 대상 MD만
 
 python3 build_posts_list.py             # all_posts.txt / all_pages.txt / all_links.txt 수동 재생성
 ```
 
-파이프라인 실행 순서: `images → md → html` 고정.
+파이프라인 실행 순서: `html → images → md` 고정. HTML을 먼저 실행하여 로컬 캐시를 구축하고, images/md 단계에서 재활용한다. `--images`나 `--md`만 지정해도 HTML 단계는 항상 포함된다.
 
 **옵션 제약**: `--posts`, `--pages`, `--custom`은 상호 배타적이며 동시에 사용할 수 없다. 세 플래그 모두 `--sample`과 동시에 사용할 수 없다.
 
@@ -66,10 +68,13 @@ python3 build_posts_list.py             # all_posts.txt / all_pages.txt / all_li
   all_pages.txt              ← sitemap-pages.xml URL+날짜 목록 (날짜 내림차순)
   all_links.txt              ← all_posts.txt + all_pages.txt 병합·중복 제거 (기본 소스)
   custom_posts.txt           ← 수동 작성 URL 목록 (--custom 옵션 소스)
+  kakao_pf_index.json        ← Kakao PF 게시글 캐시 (API 응답 JSON)
   images/카테고리명/YYYY/MM/  ← 본문 이미지 (카테고리·날짜별 폴더, 고유 이미지)
   images/카테고리명/          ← 재사용 일반 이미지 (해시 중복 2+회 출현)
   images/카테고리명/thumbnails/ ← 재사용 썸네일 (해시 중복 2+회 출현)
   images/YYYY/MM/            ← 카테고리 없는 본문 이미지 (고유)
+  images/multilang_fallback.tsv ← 다국어 Wayback 폴백 성공 로그
+  images/kakao_pf_log.tsv    ← Kakao PF 폴백 성공 로그
   md/                        ← 카테고리 없는 MD 파일
   md/카테고리명/              ← 카테고리별 MD 파일
   html/                      ← 카테고리 없는 원문 HTML
@@ -117,300 +122,8 @@ MD 파일 내 이미지 참조는 MD 파일 위치 기준 상대경로. `img_pre
 
 ---
 
-## utils.py
-
-### 주요 상수·함수
-
-| 이름 | 설명 |
-|------|------|
-| `REQUEST_DELAY = 0.2` | HTTP 요청 성공 후 대기(초) |
-| `DEFAULT_MAX_WORKERS = 8` | ThreadPoolExecutor 기본 워커 수 |
-| `USER_AGENT` | 공통 User-Agent |
-| `VALID_CATEGORIES` | 유효 카테고리 frozenset (10개) |
-| `extract_category(soup)` | 첫 번째 article:tag meta → 유효 카테고리 문자열 또는 `""` |
-| `url_to_slug(post_url)` | URL 마지막 경로 세그먼트 → slug (최대 120자). `download_md`·`download_html` 공통 사용 |
-| `get_session()` | 스레드 로컬 `requests.Session` 반환 |
-| `fetch_with_retry(url, ...) -> requests.Response \| None` | 3회 재시도 + 백오프(1→2초). 404/410 즉시 포기. 성공 시 `REQUEST_DELAY` 대기 |
-| `clean_url(url)` | `/size/w\d+` 제거 + `rstrip('/')` |
-| `date_to_folder(date_str)` | `'YYYY-MM-DD'` → `'YYYY/MM'` |
-| `load_image_map(filepath)` | `image_map.tsv` → `{clean_url: 상대경로}` |
-| `load_done_file(filepath)` | `done_*.txt` → `{slug: post_url}` |
-| `load_failed_post_urls(filepath)` | 실패 목록 첫 번째 컬럼 → `set[str]` |
-| `load_posts(filepath)` | `all_links.txt` / `all_posts.txt` 등 → `[(url, date), ...]` |
-| `append_line(filepath, line)` | 줄 추가. 스레드 안전, 부모 디렉토리 자동 생성 |
-| `filter_file_lines(filepath, keep_fn)` | `keep_fn(line) → bool` 기반 in-place 필터링. 스레드 안전 |
-| `remove_lines_by_prefix(filepath, prefix)` | `filter_file_lines`에 위임 |
-| `eta_str(done, total, start_time)` | 진행률 + **Elapsed(경과 시간)** 문자열. 형식: `[  N/TOTAL \| XX.X% \| Elapsed HH:MM:SS]` |
-| `ensure_utf8_console()` | Windows 콘솔 UTF-8 강제 설정 |
-
-### FailedLog 클래스
-
-`download_md.py` / `download_html.py` 공통 실패 이력 관리. `(post_url, reason)` 2-tuple 기반.
-
-```python
-class FailedLog:
-    def __init__(self, filepath: Path, lock: threading.Lock): ...
-    def record(self, post_url: str, reason: str) -> None   # 중복 방지
-    def remove(self, post_url: str) -> None                # 해당 URL 전체 삭제
-    def load_post_urls(self) -> set[str]                   # retry 필터링용
-```
-
-lock 내부에서 캐시 갱신, lock 외부에서 파일 기록. `append_line` 내부 `_file_lock`이 원자성 보장.
-
-### write_text_unique 함수
-
-`download_md.py` / `download_html.py` 공통의 slug 충돌 해소 + 파일 저장 패턴.
-
-```python
-def write_text_unique(
-    target_dir, slug, suffix, content,
-    done_map, done_urls, post_url, lock, done_file
-) -> str | None:
-```
-
-1단계(잠금 외부): 동일 내용 기존 파일 탐색.
-2단계(잠금 내부): 최종 경로 확정·쓰기·`done_map`/`done_urls` 갱신.
-반환: 실제 slug 문자열. `post_url`이 already-done이면 `None`.
-`OSError`는 호출 측(`process_post`)에서 `write_failed:...`로 실패 기록 후 `False` 반환.
-
-### run_pipeline 함수
-
-`download_md.py` / `download_html.py` 공통 ThreadPoolExecutor 루프.
-
-```python
-def run_pipeline(
-    posts, process_fn, failed_log, retry_mode, label, max_workers
-) -> None:
-```
-
-`process_fn: (url: str, date: str) -> bool`. retry 모드 시 실패 목록 필터링 및 성공 후 `failed_log.remove()` 처리.
-진행도 출력 간격: 대상 포스트 수가 **100개 이하면 10개 단위**, **초과면 50개 단위**.
-`download_images.py`는 retry 로직이 더 복잡(3-tuple, fetch_post_failed 별도 삭제)하므로 독립 구현 유지하며 동일한 출력 간격 규칙을 적용한다.
-
----
-
-## build_posts_list.py
-
-### 사이트맵 URL
-
-| 상수 | URL |
-|------|-----|
-| `SITEMAP_URL` | `https://blog-ko.lordofheroes.com/sitemap-posts.xml` |
-| `SITEMAP_PAGES_URL` | `https://blog-ko.lordofheroes.com/sitemap-pages.xml` |
-
-두 사이트맵 모두 `xml.etree.ElementTree`로 파싱 (namespace 유무 모두 처리).
-`<lastmod>`에서 `YYYY-MM-DD` 추출. 없으면 빈 문자열로 맨 뒤 정렬.
-가장 오래된 포스트: 2020-07-27.
-
-### 출력 파일
-
-| 상수 | 파일 | 설명 |
-|------|------|------|
-| `OUTPUT_FILE` | `loh_blog/all_posts.txt` | sitemap-posts.xml 결과, 날짜 내림차순 |
-| `PAGES_OUTPUT_FILE` | `loh_blog/all_pages.txt` | sitemap-pages.xml 결과, 날짜 내림차순 |
-| `LINKS_OUTPUT_FILE` | `loh_blog/all_links.txt` | 두 파일 병합·중복 제거, 날짜 내림차순 |
-
-### 주요 함수
-
-| 함수 | 설명 |
-|------|------|
-| `_build_sitemap_file(sitemap_url, output_file)` | (내부 헬퍼) 범용 단일 사이트맵 fetch → 정렬 → 파일 저장. `build_and_write` / `build_pages_and_write` 공통 내부 헬퍼. |
-| `build_and_write() -> tuple[int, list[tuple[str, str]]]` | sitemap-posts.xml → `all_posts.txt` 전체 재작성. `(URL 수, entries 리스트)` 반환. |
-| `build_pages_and_write() -> tuple[int, list[tuple[str, str]]]` | sitemap-pages.xml → `all_pages.txt` 전체 재작성. 시그니처·반환값은 `build_and_write()`와 동일. |
-| `build_links_and_write() -> int` | `all_posts.txt` + `all_pages.txt` 병합·중복 제거 → `all_links.txt` 재작성. posts 항목 우선(동일 URL 시 posts 날짜 사용). 저장된 항목 수 반환. |
-| `fetch_newest_sitemap_date() -> str` | posts + pages 두 사이트맵에서 가장 최신 lastmod 날짜를 반환. 둘 다 실패 시 `""`. |
-
-`main()`은 `build_and_write()` → `build_pages_and_write()` → `build_links_and_write()` 순서로 세 파일 모두 생성한다.
-
----
-
-## download_images.py
-
-### 경로 상수
-
-`ROOT_DIR = Path(__file__).parent / "loh_blog"` (스크립트 위치 기준, 실행 디렉토리 무관).
-
-### 주요 상수
-
-- `BLOG_HOST = "blog-ko.lordofheroes.com"`
-- `GDRIVE_HOSTS = {"drive.google.com", "docs.google.com", "lh3.googleusercontent.com"}`
-- `COMMUNITY_CDN_HOST = "community-ko-cdn.lordofheroes.com"`
-- `DL_KEYWORDS = {"다운로드", "download", "다운", "받기", "저장", "고화질 이미지", "고화질", "이미지", "원본"}`
-- `DONE_POSTS_FILE`: 이미지 수집 완료 포스트 URL 목록.
-
-### 락 구조
-
-- `_state_lock`: `seen_urls` / `img_hashes` / `image_map` / `hash_dup_count` / `thumb_hashes` in-memory 갱신 전용.
-- `_save_lock`: `save_image()` 파일명 충돌 해소 전용 (디스크 I/O 직렬화).
-- `_dl_lock`: `ImageFailedLog` 내부 캐시 전용.
-
-### ImageFailedLog 클래스
-
-이미지 실패 이력(3-tuple: `post_url`, `img_url`, `reason`)을 스레드 안전하게 관리.
-`utils.FailedLog`와 동일한 "lock 내부 캐시 갱신 / lock 외부 파일 기록" 패턴 적용.
-전역 `_failed_log` 인스턴스로 접근. 모듈 수준 `record_failed` / `remove_from_failed` 래퍼 함수 제공.
-
-```python
-class ImageFailedLog:
-    def record(self, post_url, img_url, reason) -> None
-    def remove(self, post_url, reason=None) -> None   # reason=None이면 post_url 전체 삭제
-    def load_post_urls(self) -> set[str]
-```
-
-### 이미지 수집 (`collect_image_urls`)
-
-| 소스 | 타입 | 조건 |
-|------|------|------|
-| `og:image` meta | `og_image` | 전체 페이지 |
-| img src/data-src | `gdrive` | `hostname in GDRIVE_HOSTS` |
-| img src/data-src | `img` | `"/content/images/" in path and hostname == BLOG_HOST` |
-| img src/data-src | `img` | `hostname == COMMUNITY_CDN_HOST and ext in IMG_EXTS` |
-| a href | `gdrive` | `hostname in GDRIVE_HOSTS` |
-| a href | `linked_direct` | `ext in IMG_EXTS` |
-| a href | `linked_keyword` | 앵커 텍스트에 `DL_KEYWORDS` 키워드 또는 해상도 패턴(`\d+[xX×]\d+`) |
-
-content_tag 탐색 순서: `.gh-content` → `.post-content` → `article` → `main`.
-
-### 다운로드 폴백 체인
-
-| 타입 | 1단계 | 2단계 | 3단계 |
-|------|-------|-------|-------|
-| `img` / `og_image` | 직접 + CT 검증 | Wayback `im_` | Wayback 포스트 스냅샷에서 img/og:image 탐색 |
-| `gdrive` | 직접 (min 500B) | Wayback `im_` | Wayback 포스트 스냅샷에서 img 탐색 |
-| `linked_keyword` | 직접 + CT 검증 | Wayback `im_` | Wayback 포스트 스냅샷에서 `<a>` 탐색 |
-| `linked_direct` | 직접 + CT 또는 확장자 | community CDN에 한해 Wayback `im_` | - |
-
-- `_wayback_oldest(url)`: CDX API `limit=1`. `_wayback_cache`에 캐시. 동일 URL 동시 요청 시 `_wayback_events`로 선착 스레드만 fetch, 나머지는 대기 후 캐시 사용.
-- `_add_im(url)`: `/web/{ts}/` → `/web/{ts}im_/`.
-- `_fetch_wayback_post_soup`: 파싱 전 `resp.encoding = resp.apparent_encoding or "utf-8"`로 인코딩 보정 (Wayback 래퍼 페이지의 부정확한 헤더 대응).
-- `_fetch_wayback_gdrive_from_post`: img 탐색 시 `src` 및 `data-src` 모두 확인. lazy-load 이미지가 Wayback 스냅샷에 `data-src`로만 남아있는 경우를 처리한다.
-- Wayback 포스트 스냅샷 탐색 함수들은 `_normalized_link_key` 완전 일치 비교.
-
-### 2단계 처리 흐름
-
-**Phase 1 (다운로드)**: `process_post()`에서 `extract_category(soup)` 호출 → `images/{category}/{YYYY}/{MM}/`에 저장. 일반 이미지·썸네일 모두 SHA-256 해시 기반 중복 체크 (`img_hashes: dict[str, str]`). 해시 중복 시 저장 생략, `image_map`에 기존 경로 매핑. 중복 횟수는 `hash_dup_count`로 추적.
-
-**Phase 2 (후처리)**: `_relocate_shared_images()` — `hash_dup_count`에서 재사용 이미지 식별 후 카테고리 루트로 이동:
-- 일반 이미지 → `images/{category}/`
-- 썸네일 → `images/{category}/thumbnails/`
-- `image_map.tsv`, `image_hashes.tsv` 경로 자동 갱신. 빈 디렉토리 정리.
-
-### 해시 캐시
-
-`image_hashes.tsv` (형식: `sha256\trel_path\tT/빈값`). 모든 이미지(일반+썸네일) 통합 관리. 레거시 `thumbnail_hashes.txt`에서 자동 마이그레이션 (첫 실행 시). `_load_or_build_img_hashes()` → `(img_hashes, thumb_hashes)` 반환.
-
-### 기타
-
-- `save_image(content, filename, folder) -> str`: 충돌 시 `_2`, `_3` 번호 부여. 항상 유효한 파일명 반환.
-- `failed_images.txt` 형식: `post_url\timg_url\treason`. fetch_post_failed는 img_url 빈 문자열.
-- retry 모드: `fetch_post_failed`는 포스트 fetch 성공 시 제거. `download_failed`는 `fail==0 and ok>0` 시에만 제거. retry 대상 0개이면 `run_pipeline`과 동일하게 메시지 출력 후 즉시 반환.
-- `--backfill-map`: 기존 다운로드 이력으로 `image_map.tsv` 재구성. thumbnails 폴더는 `relative_to(IMAGES_DIR).parts`에 `"thumbnails"` 포함 여부로 제외.
-- `image_map.tsv`에 썸네일(`og_image`) 경로도 기록한다.
-- 단독 실행 시 `--posts` 기본값은 `all_links.txt`.
-
----
-
-## download_md.py
-
-### 경로 상수
-
-`ROOT_DIR = Path(__file__).parent / "loh_blog"` (스크립트 위치 기준).
-
-### 락 구조
-
-- `_md_done_lock`: `done_map` / `done_urls` 갱신 전용
-- `_md_fail_lock`: `_failed_log` 내부 캐시 보호 전용
-
-### HTML → Markdown 변환
-
-- **제목 탐색**: `h1.post-title` → `h1` → `og:title` 순.
-- **본문 탐색**: `section.post-content` → `div.post-content` → `article` → `main` 순.
-- **제거 태그**: `author-card`, `post-share`, `post-tags`, `post-nav`, `related-posts`, `comments`.
-- **제목 중복 방지**: body 내 h1 sweep 후 `title_tag.parent is not None` 체크로 header 범위 외 제목 별도 제거.
-- **`_wrap_marker(inner, marker)`**: `**`, `*`, `~~` 마커를 씌울 때 앞뒤 공백을 마커 바깥으로 이동. whitespace-only인 경우 마커 없이 원문 공백을 그대로 반환 (중첩 strong 평탄화 시 공백 소멸 방지).
-- **`_strip_marker(text, marker)`**: text가 해당 마커로 외부 래핑된 경우에만 마커를 제거한다 (중첩 마커 평탄화용). 마커 문자 경계를 직접 검사하므로 `**bold**` 내부에서 `*`를 오탐하지 않는다. `strong/b`, `em/i`, `del/s/strike` 변환 시 `_children_inline` 결과에 적용 후 `_wrap_marker`를 씌운다. 원본 HTML에 잘못 중첩된 `<strong><strong>...</strong></strong>` 구조를 단일 `**...**`로 평탄화한다.
-- **`img_to_md(img_tag, post_url, image_map, img_prefix)`**: `image_map` 등록 시 `img_prefix + 상대경로` 형태로 참조. `img_prefix`는 `process_post`에서 `target_dir.relative_to(ROOT_DIR).parts`의 depth로 자동 계산 (`md/` → `"../"`, `md/카테고리/` → `"../../"`). 미등록 시 절대 URL 폴백.
-- `INLINE_MAX_DEPTH = 60`: 비정상 중첩 HTML 안전장치.
-- `collapse_blank_lines`: 연속 빈 줄 최대 1개.
-- `_convert_table`: `<thead>` 없이 `<tbody>`만 있을 때 첫 tr을 헤더로 사용하며 body_rows 중복 방지.
-- slug 충돌 시 `write_text_unique`가 `slug_2.md`, `slug_3.md` ... 자동 처리.
-- `OSError` 발생 시 `write_failed:...`로 실패 기록 후 `False` 반환.
-
----
-
-## download_html.py
-
-### 경로 상수
-
-`ROOT_DIR = Path(__file__).parent / "loh_blog"` (스크립트 위치 기준).
-
-### 락 구조
-
-- `_html_done_lock`: `done_map` / `done_urls` 갱신 전용
-- `_html_fail_lock`: `_failed_log` 내부 캐시 보호 전용
-
-### 처리 흐름
-
-fetch 후 Content-Type 검증(`text/html` 아니면 `unexpected_content_type:...`으로 실패).
-`extract_category(soup)`로 카테고리 추출 후 `HTML_DIR / category` 또는 `HTML_DIR`에 저장.
-`write_text_unique` 호출을 `try/except OSError`로 감싸고, 오류 시 `write_failed:...`로 실패 기록.
-`process_post`가 `date`를 사용하지 않으므로 `run_pipeline` 호출 시 lambda로 시그니처를 맞춘다.
-
----
-
-## run_all.py
-
-### 주요 상수
-
-- `POSTS_FILE = ROOT_DIR / "all_posts.txt"`
-- `PAGES_FILE = ROOT_DIR / "all_pages.txt"`
-- `LINKS_FILE = ROOT_DIR / "all_links.txt"`
-- `CUSTOM_POSTS_FILE = ROOT_DIR / "custom_posts.txt"`
-- `ROOT_DIR = Path(__file__).parent / "loh_blog"`
-- 실행 순서: `PIPELINE_ORDER = ("images", "md", "html")` 고정.
-
-### CLI 옵션
-
-| 옵션 | 설명 |
-|------|------|
-| `--images` / `--md` / `--html` | 해당 단계만 실행. 미지정 시 전체 실행. |
-| `--retry` | 실패 목록 재처리. `--sample`과 조합 가능. |
-| `--posts` | `all_posts.txt`를 소스로 사용. 사이트맵 자동 갱신 건너뜀. |
-| `--pages` | `all_pages.txt`를 소스로 사용. 사이트맵 자동 갱신 건너뜀. |
-| `--custom` | `custom_posts.txt`를 소스로 사용. 사이트맵 자동 갱신 건너뜀. |
-| `--sample N` | 랜덤 N개 테스트. **`all_links.txt` 행 수의 10%를 상한**으로 자동 클램핑. `--posts` / `--pages` / `--custom`과 동시 사용 불가. |
-| `--seed N` | `--sample` 샘플링 고정 시드. |
-| *(미지정)* | `all_links.txt` 사용 (기본값). 사이트맵 freshness 체크 후 필요 시 갱신. |
-
-`--posts`, `--pages`, `--custom`은 상호 배타적. 둘 이상 동시 지정 시 `parser.error()`.
-
-### 주요 헬퍼 함수
-
-| 함수 | 설명 |
-|------|------|
-| `_maybe_refresh_posts_list()` | `all_links.txt` 자동 갱신. `fetch_newest_sitemap_date()`(posts + pages 양쪽)로 remote 날짜 취득, `all_links.txt` 첫 줄 날짜와 비교해 불일치 시 `build_and_write()` → `build_pages_and_write()` → `build_links_and_write()` 순서로 재빌드. pages 갱신 실패 시에도 기존 `all_pages.txt`를 활용해 links 생성 시도. |
-| `_newest_local_date(posts_file)` | 지정 파일의 첫 번째 유효 날짜 읽기. 파일 부재·`OSError` 모두 `""` 반환. |
-| `_count_all_posts(posts_file)` | 파일의 유효 행 수(공백·`#` 제외) 반환. `--sample` 상한 계산 시 `LINKS_FILE` 기준으로 호출. 읽기 실패 시 `0`. |
-| `_load_failed_posts_for_retry(selected)` | 선택된 단계의 실패 파일 union → `set[str]`. |
-| `_sample_posts(posts, n, seed)` | 랜덤 샘플링. |
-
-### all_links.txt 자동 갱신 흐름
-
-1. `_newest_local_date(LINKS_FILE)`: `all_links.txt` 첫 줄의 날짜(내림차순 최신) 읽기.
-2. `fetch_newest_sitemap_date()`: posts + pages 사이트맵 양쪽에서 최신 날짜 취득 (둘 중 최대값).
-3. 두 값이 일치하면 갱신 스킵. 불일치하거나 로컬 파일이 없으면 `build_and_write()` → `build_pages_and_write()` → `build_links_and_write()`로 전체 재빌드.
-
-### --sample 상한 클램핑
-
-```
-cap = max(1, all_links.txt 유효 행 수 // 10)
-args.sample = min(args.sample, cap)
-```
-
-`all_links.txt`가 없거나 읽기 실패 시 클램핑 없이 통과.
-
----
-
 ## 네트워크 설정
 
-Claude 컨테이너 환경은 네트워크 활성화 상태. 단, 허용된 도메인 목록(`api.anthropic.com`, `github.com`, `pypi.org` 등)만 접근 가능하며, `blog-ko.lordofheroes.com` 및 `web.archive.org`는 허용 목록에 포함되지 않는다. 의존성 설치(`pip install`)는 컨테이너 내에서 직접 수행 가능하고, 실제 스크래핑은 허용 도메인이 포함된 로컬 환경에서 수행한다.
+- 블로그 도메인 요청은 토큰 버킷 rate limiter로 속도 제한 (대규모 배치: 10 req/s, 소규모 배치 ≤100건: 20 req/s)
+- HTTP 429 Retry-After 헤더를 존중하며 retry 횟수를 소모하지 않는다
+- Claude 컨테이너 환경은 네트워크 활성화 상태. 단, 허용된 도메인 목록(`api.anthropic.com`, `github.com`, `pypi.org` 등)만 접근 가능하며, `blog-ko.lordofheroes.com` 및 `web.archive.org`는 허용 목록에 포함되지 않는다. 의존성 설치(`pip install`)는 컨테이너 내에서 직접 수행 가능하고, 실제 스크래핑은 허용 도메인이 포함된 로컬 환경에서 수행한다.
