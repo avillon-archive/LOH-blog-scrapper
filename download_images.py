@@ -42,6 +42,7 @@ IMAGE_MAP_FILE = ROOT_DIR / "image_map.tsv"
 THUMB_HASH_FILE = ROOT_DIR / "thumbnail_hashes.txt"  # 썸네일 SHA-256 해시 캐시 (레거시)
 IMG_HASH_FILE = ROOT_DIR / "image_hashes.tsv"  # 통합 이미지 해시 캐시 (hash\trel_path)
 MULTILANG_LOG_FILE = IMAGES_DIR / "multilang_fallback.tsv"  # 다국어 폴백 성공 로그
+MULTILANG_INDEX_CACHE = ROOT_DIR / "multilang_sitemap_index.json"  # EN/JA 사이트맵 인덱스 캐시
 
 IMG_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg"}
 DL_KEYWORDS = {
@@ -797,13 +798,81 @@ def _multilang_image_url_candidates(img_url: str) -> list[tuple[str, str]]:
     return candidates
 
 
+def _load_multilang_cache() -> tuple[dict[str, list[tuple[str, str]]], dict[str, str]]:
+    """캐시 파일에서 date_index와 meta를 로드. 없으면 ({}, {}) 반환."""
+    import json
+
+    if not MULTILANG_INDEX_CACHE.exists():
+        return {}, {}
+    try:
+        with open(MULTILANG_INDEX_CACHE, "r", encoding="utf-8") as f:
+            raw = json.load(f)
+        meta = raw.pop("_meta", {})
+        index = {d: [(u, l) for u, l in entries] for d, entries in raw.items()}
+        return index, meta
+    except Exception:
+        return {}, {}
+
+
+def _save_multilang_cache(
+    date_index: dict[str, list[tuple[str, str]]], meta: dict[str, str]
+) -> None:
+    import json
+
+    raw: dict = {d: entries for d, entries in date_index.items()}
+    raw["_meta"] = meta
+    with open(MULTILANG_INDEX_CACHE, "w", encoding="utf-8") as f:
+        json.dump(raw, f, ensure_ascii=False, indent=1)
+
+
 def _build_multilang_date_index() -> dict[str, list[tuple[str, str]]]:
-    """EN/JA 사이트맵을 직접 가져와 {date: [(post_url, lang), ...]} 인덱스를 구축한다."""
-    from build_posts_list import parse_sitemap
+    """EN/JA 사이트맵을 직접 가져와 {date: [(post_url, lang), ...]} 인덱스를 구축한다.
 
-    date_index: dict[str, list[tuple[str, str]]] = {}
+    캐시 파일이 있으면 각 언어 사이트맵의 최신 날짜를 비교해
+    변경이 없는 언어는 건너뛴다.
+    """
+    from build_posts_list import fetch_newest_single_sitemap_date, parse_sitemap
 
+    # 1) 캐시 로드
+    cached_index, cached_meta = _load_multilang_cache()
+
+    # 2) 각 언어별 최신 날짜 비교
+    need_refresh: dict[str, bool] = {}
     for lang, lang_host in MULTILANG_BLOG_HOSTS.items():
+        sitemap_url = f"https://{lang_host}/sitemap-posts.xml"
+        remote_date = fetch_newest_single_sitemap_date(sitemap_url)
+        cached_date = cached_meta.get(f"{lang}_latest", "")
+
+        if remote_date and cached_date == remote_date:
+            print(f"  [{lang.upper()}] 최신 상태 ({cached_date}), 갱신 불필요")
+        else:
+            need_refresh[lang] = True
+            if remote_date:
+                print(f"  [{lang.upper()}] 갱신 필요 (캐시: {cached_date or '없음'} → 원격: {remote_date})")
+            else:
+                print(f"  [{lang.upper()}] 원격 날짜 확인 실패, 전체 fetch 시도")
+
+    # 3) 모두 최신이면 캐시 반환
+    if not need_refresh and cached_index:
+        return cached_index
+
+    # 4) 변경된 언어만 fetch, 나머지는 캐시 유지
+    date_index: dict[str, list[tuple[str, str]]] = (
+        {k: list(v) for k, v in cached_index.items()} if cached_index else {}
+    )
+    new_meta = dict(cached_meta)
+
+    # 갱신 대상 언어의 기존 항목 제거
+    for lang in need_refresh:
+        date_index = {
+            d: [(u, l) for u, l in entries if l != lang]
+            for d, entries in date_index.items()
+        }
+        date_index = {d: entries for d, entries in date_index.items() if entries}
+
+    # 새로 fetch
+    for lang in need_refresh:
+        lang_host = MULTILANG_BLOG_HOSTS[lang]
         sitemap_url = f"https://{lang_host}/sitemap-posts.xml"
 
         resp = fetch_with_retry(sitemap_url, allow_redirects=True, timeout=30)
@@ -819,12 +888,18 @@ def _build_multilang_date_index() -> dict[str, list[tuple[str, str]]]:
             continue
 
         count = 0
+        latest = ""
         for post_url, date in entries:
             if date:
                 date_index.setdefault(date, []).append((post_url, lang))
                 count += 1
+                if date > latest:
+                    latest = date
+        new_meta[f"{lang}_latest"] = latest
         print(f"  [{lang.upper()}] {count}개 포스트 인덱싱 완료")
 
+    # 5) 캐시 저장
+    _save_multilang_cache(date_index, new_meta)
     return date_index
 
 
