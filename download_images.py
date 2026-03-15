@@ -19,6 +19,7 @@ from utils import (
     DEFAULT_MAX_WORKERS,
     LineBuffer,
     append_line,
+    SIZE_W_RE,
     clean_url,
     date_to_folder,
     ensure_utf8_console,
@@ -316,6 +317,7 @@ def _normalized_link_key(url: str) -> str:
     parsed = urllib.parse.urlparse(url)
     host = (parsed.hostname or "").lower()
     path = urllib.parse.unquote(parsed.path or "")
+    path = SIZE_W_RE.sub("", path)
     if path != "/":
         path = path.rstrip("/")
     return f"{host}{path}"
@@ -1288,7 +1290,7 @@ def collect_image_urls(soup: BeautifulSoup, post_url: str) -> list[tuple[str, st
         if key in seen_keys:
             return
         seen_keys.add(key)
-        results.append((url, utype))
+        results.append((clean_url(url), utype))
 
     og = soup.find("meta", property="og:image")
     if og and og.get("content"):
