@@ -196,6 +196,9 @@ class PostProcessResult:
     ok: int
     fail: int
     post_fetch_ok: bool
+    ok_original: int = 0
+    ok_multilang: int = 0
+    ok_kakao: int = 0
 
 
 # ---------------------------------------------------------------------------
@@ -1592,12 +1595,21 @@ def download_one_image(
     multilang_date_index: dict[str, list[tuple[str, str]]] | None = None,
     kakao_pf_fallback: bool = False,
     kakao_pf_index: dict[str, list[KakaoPFPost]] | None = None,
-) -> bool:
+) -> str:
+    """이미지 1건 다운로드. 성공 방식을 나타내는 문자열을 반환한다.
+
+    Returns:
+        "already"  — 이미 다운로드됨 (seen_urls 히트)
+        "original" — 원본/KO Wayback으로 성공
+        "multilang"— 다국어 Wayback 폴백 성공
+        "kakao"    — KakaoPF 폴백 성공
+        ""         — 실패
+    """
     seen_key = _seen_key(utype, img_url)
 
     # 빠른 비잠금 확인
     if seen_key in seen_urls:
-        return True
+        return "already"
 
     # ── 다운로드 단계 (잠금 외부 – 네트워크 I/O) ──────────────────────────
     payload: tuple[bytes, str, str, str] | None = None
@@ -1672,7 +1684,7 @@ def download_one_image(
 
     if payload is None:
         record_failed(post_url, img_url, "download_failed")
-        return False
+        return ""
 
     content, final_url, content_type, content_disposition = payload
     filename = _determine_filename(
@@ -1695,7 +1707,7 @@ def download_one_image(
     with _state_lock:
         # 잠금 획득 후 재확인 (다른 스레드가 먼저 처리했을 수 있음)
         if seen_key in seen_urls:
-            return True
+            return "already"
 
         existing_rel = img_hashes.get(content_hash)
         if existing_rel is not None:
@@ -1759,7 +1771,12 @@ def download_one_image(
             # primary가 multilang
             _multilang_log_buf.add(f"{primary_rel}\t{post_url}\t{primary_source}")
 
-    return True
+    # 성공 방식 판별
+    if primary_source is None:
+        return "original"
+    if primary_source.startswith("http://pf.kakao.com/"):
+        return "kakao"
+    return "multilang"
 
 
 # ---------------------------------------------------------------------------
@@ -1814,11 +1831,10 @@ def process_post(
     else:
         folder = IMAGES_DIR / date_folder
 
-    ok = 0
-    fail = 0
+    ok = fail = ok_original = ok_multilang = ok_kakao = 0
     post_soup_cache: dict[str, tuple[BeautifulSoup, str] | None] = {}
     for idx, (img_url, utype) in enumerate(images, start=1):
-        if download_one_image(
+        how = download_one_image(
             img_url,
             utype,
             post_url,
@@ -1836,8 +1852,15 @@ def process_post(
             multilang_date_index=multilang_date_index,
             kakao_pf_fallback=kakao_pf_fallback,
             kakao_pf_index=kakao_pf_index,
-        ):
+        )
+        if how:
             ok += 1
+            if how == "original":
+                ok_original += 1
+            elif how == "multilang":
+                ok_multilang += 1
+            elif how == "kakao":
+                ok_kakao += 1
         else:
             fail += 1
 
@@ -1846,7 +1869,9 @@ def process_post(
         done_post_urls.add(post_url)
         _done_posts_buf.add(post_url)
 
-    return PostProcessResult(ok=ok, fail=fail, post_fetch_ok=True)
+    return PostProcessResult(ok=ok, fail=fail, post_fetch_ok=True,
+                             ok_original=ok_original, ok_multilang=ok_multilang,
+                             ok_kakao=ok_kakao)
 
 
 # ---------------------------------------------------------------------------
@@ -2036,8 +2061,15 @@ def run_images(
     start = time.time()
     total_ok = 0
     total_fail = 0
+    total_original = 0
+    total_multilang = 0
+    total_kakao = 0
     completed = 0
     counter_lock = threading.Lock()
+
+    print(f"\n{'━' * 60}")
+    print(f"[이미지] 다운로드 시작: {total}개 포스트")
+    print(f"{'━' * 60}")
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         future_to_post = {
@@ -2063,6 +2095,9 @@ def run_images(
             with counter_lock:
                 total_ok += result.ok
                 total_fail += result.fail
+                total_original += result.ok_original
+                total_multilang += result.ok_multilang
+                total_kakao += result.ok_kakao
                 completed += 1
                 cur_completed = completed
 
@@ -2072,7 +2107,13 @@ def run_images(
                     remove_from_failed(post_url, reason="download_failed")
 
             if cur_completed % report_interval == 0 or cur_completed == total:
-                print(f"  {eta_str(cur_completed, total, start)} 성공={total_ok} 실패={total_fail}")
+                eta = eta_str(cur_completed, total, start)
+                if retry_mode:
+                    print(f"  {eta} 성공={total_ok} "
+                          f"(원본={total_original} multilang={total_multilang} "
+                          f"kakao={total_kakao}) 실패={total_fail}")
+                else:
+                    print(f"  {eta} 성공={total_ok} 실패={total_fail}")
 
     # 모든 worker 완료 후 버퍼 잔량을 파일에 flush
     _done_buf.flush_all()
@@ -2088,7 +2129,12 @@ def run_images(
         if moved:
             print(f"[이미지] 공유 이미지 {moved}개 재배치 완료")
 
-    print(f"\n[이미지 완료] 성공={total_ok}, 실패={total_fail}")
+    if retry_mode:
+        print(f"\n[이미지 완료] 성공={total_ok} "
+              f"(원본={total_original} multilang={total_multilang} "
+              f"kakao={total_kakao}) 실패={total_fail}")
+    else:
+        print(f"\n[이미지 완료] 성공={total_ok}, 실패={total_fail}")
 
 
 if __name__ == "__main__":
