@@ -345,10 +345,19 @@ def main():
     print()
 
     # ── 동적 워커 수·rate limit 설정 ──────────────────────────────────
-    max_workers = min(len(posts), 32) if len(posts) <= 100 else DEFAULT_MAX_WORKERS
-    if len(posts) <= 100:
+    if args.retry:
+        retry_urls: set[str] = set()
+        for fpath in (FAILED_HTML_FILE, FAILED_IMAGES_FILE, FAILED_MD_FILE):
+            retry_urls |= load_failed_post_urls(fpath)
+        post_urls = {url for url, _ in posts}
+        effective_count = len(retry_urls & post_urls) or len(posts)
+    else:
+        effective_count = len(posts)
+
+    max_workers = min(effective_count, 32) if effective_count <= 100 else DEFAULT_MAX_WORKERS
+    if effective_count <= 100:
         set_blog_rate_limit(BLOG_RATE_LIMIT_SMALL)  # 20 req/s
-    print(f"[설정] workers={max_workers}, rate_limit={'20' if len(posts) <= 100 else '10'} req/s")
+    print(f"[설정] workers={max_workers}, rate_limit={'20' if effective_count <= 100 else '10'} req/s")
     print()
 
     total_start = time.time()
