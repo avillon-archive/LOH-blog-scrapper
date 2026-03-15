@@ -26,7 +26,15 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from utils import ensure_utf8_console, load_failed_post_urls, load_posts
+from utils import (
+    BLOG_RATE_LIMIT_SMALL,
+    DEFAULT_MAX_WORKERS,
+    build_html_index,
+    ensure_utf8_console,
+    load_failed_post_urls,
+    load_posts,
+    set_blog_rate_limit,
+)
 from build_posts_list import (
     build_and_write,
     build_pages_and_write,
@@ -48,7 +56,9 @@ CUSTOM_POSTS_FILE = ROOT_DIR / "custom_posts.txt"
 FAILED_IMAGES_FILE = ROOT_DIR / "failed_images.txt"
 FAILED_MD_FILE = ROOT_DIR / "failed_md.txt"
 FAILED_HTML_FILE = ROOT_DIR / "failed_html.txt"
-PIPELINE_ORDER = ("images", "md", "html")
+PIPELINE_ORDER = ("html", "images", "md")
+HTML_DIR = ROOT_DIR / "html"
+DONE_HTML_FILE = ROOT_DIR / "done_html.txt"
 
 
 # ---------------------------------------------------------------------------
@@ -252,6 +262,7 @@ def main():
     }
     if not selected:
         selected = set(PIPELINE_ORDER)
+    selected.add("html")  # html 은 항상 실행 (md/images 가 저장된 HTML 을 재활용)
 
     # ── 포스트 소스 파일 결정 ───────────────────────────────────────────
     force_download = False
@@ -329,22 +340,34 @@ def main():
     print(f"[순서] {' -> '.join(selected_order)}")
     print()
 
+    # ── 동적 워커 수·rate limit 설정 ──────────────────────────────────
+    max_workers = min(len(posts), 32) if len(posts) <= 100 else DEFAULT_MAX_WORKERS
+    if len(posts) <= 100:
+        set_blog_rate_limit(BLOG_RATE_LIMIT_SMALL)  # 20 req/s
+    print(f"[설정] workers={max_workers}, rate_limit={'20' if len(posts) <= 100 else '10'} req/s")
+    print()
+
     total_start = time.time()
+    html_index: dict[str, "Path"] | None = None
 
     for step in selected_order:
         print("━" * 60)
-        if step == "images":
+        if step == "html":
+            print("▶ HTML 파일 저장 시작")
+            print("━" * 60)
+            run_html(posts, retry_mode=args.retry, force_download=force_download,
+                     max_workers=max_workers)
+            html_index = build_html_index(HTML_DIR, DONE_HTML_FILE)
+        elif step == "images":
             print("▶ 이미지 다운로드 시작")
             print("━" * 60)
-            run_images(posts, retry_mode=args.retry, force_download=force_download)
+            run_images(posts, retry_mode=args.retry, force_download=force_download,
+                       html_index=html_index, max_workers=max_workers)
         elif step == "md":
             print("▶ MD 파일 저장 시작")
             print("━" * 60)
-            run_md(posts, retry_mode=args.retry, force_download=force_download)
-        elif step == "html":
-            print("▶ HTML 파일 저장 시작")
-            print("━" * 60)
-            run_html(posts, retry_mode=args.retry, force_download=force_download)
+            run_md(posts, retry_mode=args.retry, force_download=force_download,
+                   html_index=html_index, max_workers=max_workers)
         print()
 
     elapsed = time.time() - total_start

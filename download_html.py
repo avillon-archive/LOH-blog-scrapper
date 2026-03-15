@@ -89,7 +89,12 @@ def process_post(
 # ---------------------------------------------------------------------------
 
 
-def run_html(posts: list[tuple[str, str]], retry_mode: bool = False, force_download: bool = False) -> None:
+def run_html(
+    posts: list[tuple[str, str]],
+    retry_mode: bool = False,
+    force_download: bool = False,
+    max_workers: int = DEFAULT_MAX_WORKERS,
+) -> None:
     ensure_utf8_console()
     ROOT_DIR.mkdir(parents=True, exist_ok=True)
     HTML_DIR.mkdir(parents=True, exist_ok=True)
@@ -105,7 +110,7 @@ def run_html(posts: list[tuple[str, str]], retry_mode: bool = False, force_downl
         _failed_log,
         retry_mode,
         label="HTML",
-        max_workers=DEFAULT_MAX_WORKERS,
+        max_workers=max_workers,
     )
 
 

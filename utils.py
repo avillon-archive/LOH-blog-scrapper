@@ -19,11 +19,51 @@ if TYPE_CHECKING:
 # File I/O lock for append/filter/remove helpers.
 _file_lock = threading.Lock()
 
-# Delay after successful HTTP request to reduce server pressure.
-REQUEST_DELAY: float = 0.2
-
 # Default number of parallel workers for ThreadPoolExecutor.
-DEFAULT_MAX_WORKERS: int = 32
+DEFAULT_MAX_WORKERS: int = 8
+
+# ---------------------------------------------------------------------------
+# 블로그 도메인 Rate Limiter (토큰 버킷)
+# ---------------------------------------------------------------------------
+
+BLOG_HOST: str = "blog-ko.lordofheroes.com"
+BLOG_RATE_LIMIT: float = 10.0        # 대규모 배치 (>100건) 초당 최대 요청
+BLOG_RATE_LIMIT_SMALL: float = 20.0  # 소규모 배치 (≤100건) 초당 최대 요청
+
+
+class _TokenBucket:
+    """Thread-safe token bucket rate limiter."""
+
+    def __init__(self, rate: float, burst: int = 2) -> None:
+        self._rate = rate
+        self._burst = burst
+        self._tokens = float(burst)
+        self._last = time.monotonic()
+        self._lock = threading.Lock()
+
+    def acquire(self) -> None:
+        while True:
+            with self._lock:
+                now = time.monotonic()
+                self._tokens = min(
+                    self._burst, self._tokens + (now - self._last) * self._rate
+                )
+                self._last = now
+                if self._tokens >= 1.0:
+                    self._tokens -= 1.0
+                    return
+                wait = (1.0 - self._tokens) / self._rate
+            time.sleep(wait)
+
+
+_blog_rate_limiter = _TokenBucket(BLOG_RATE_LIMIT)
+
+
+def set_blog_rate_limit(rate: float) -> None:
+    """배치 크기에 따라 rate limit 을 동적으로 변경한다."""
+    global _blog_rate_limiter
+    _blog_rate_limiter = _TokenBucket(rate)
+
 
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -157,30 +197,46 @@ def fetch_with_retry(
     Retry request up to 3 times with backoff (1s, 2s).
     Return response on success, None on failure.
     Stop immediately on 404/410.
+    HTTP 429 는 Retry-After 를 존중하며 retry 횟수를 소모하지 않는다.
+    블로그 도메인 요청은 토큰 버킷 rate limiter 를 거친다.
     """
     delays = [1, 2]
-    for attempt in range(3):
+    max_retries = 3
+    is_blog = urllib.parse.urlparse(url).hostname == BLOG_HOST
+    attempt = 0
+    while attempt < max_retries:
+        if is_blog:
+            _blog_rate_limiter.acquire()
         try:
             resp = get_session().request(method, url, timeout=timeout, **kwargs)
             resp.raise_for_status()
-            time.sleep(REQUEST_DELAY)
             return resp
         except requests.exceptions.HTTPError as e:
             status = e.response.status_code if e.response is not None else 0
             if status in (404, 410):
                 return None
-            if attempt < 2:
+            if status == 429:
+                retry_after = e.response.headers.get("Retry-After", "")
+                try:
+                    wait_secs = min(int(retry_after), 120)
+                except (ValueError, TypeError):
+                    wait_secs = min(5 * (attempt + 1), 60)
+                print(f"  [429] Rate limited: {url}, waiting {wait_secs}s")
+                time.sleep(wait_secs)
+                continue  # 429 는 attempt 를 소모하지 않음
+            if attempt < max_retries - 1:
                 time.sleep(delays[attempt])
         except (
             requests.exceptions.ConnectionError,
             requests.exceptions.Timeout,
             requests.exceptions.ChunkedEncodingError,
         ):
-            if attempt < 2:
+            if attempt < max_retries - 1:
                 time.sleep(delays[attempt])
         except Exception:
-            if attempt < 2:
+            if attempt < max_retries - 1:
                 time.sleep(delays[attempt])
+        attempt += 1
     return None
 
 
@@ -517,3 +573,31 @@ def run_pipeline(
                 print(f"  {eta_str(cur_completed, total, start)} 성공={ok_count} 실패={fail_count}")
 
     print(f"\n[{label} 완료] 성공={ok_count}, 실패={fail_count}")
+
+
+# ---------------------------------------------------------------------------
+# HTML 인덱스 & 캐시 읽기 (파이프라인 간 HTML 재활용)
+# ---------------------------------------------------------------------------
+
+
+def build_html_index(html_dir: Path, done_file: Path) -> dict[str, Path]:
+    """done_html.txt 와 html 디렉토리를 스캔하여 {post_url: html_path} 매핑을 반환한다."""
+    done_map = load_done_file(done_file)  # {slug: url}
+    slug_to_path: dict[str, Path] = {}
+    for html_file in html_dir.rglob("*.html"):
+        slug_to_path[html_file.stem] = html_file
+    index: dict[str, Path] = {}
+    for slug, url in done_map.items():
+        if slug in slug_to_path:
+            index[url] = slug_to_path[slug]
+    return index
+
+
+def fetch_post_html(url: str, html_index: "dict[str, Path] | None" = None) -> str | None:
+    """html_index 에서 로컬 파일을 먼저 확인하고, 없으면 서버에서 fetch 한다."""
+    if html_index is not None and url in html_index:
+        path = html_index[url]
+        if path.exists():
+            return path.read_text(encoding="utf-8")
+    resp = fetch_with_retry(url)
+    return resp.text if resp is not None else None

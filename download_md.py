@@ -13,6 +13,7 @@ from utils import (
     clean_url,
     ensure_utf8_console,
     extract_category,
+    fetch_post_html,
     fetch_with_retry,
     load_done_file,
     load_image_map,
@@ -518,18 +519,19 @@ def process_post(
     done_urls: set[str],
     image_map: dict[str, str],
     force_overwrite: bool = False,
+    html_index: "dict[str, Path] | None" = None,
 ) -> bool:
     # 빠른 비잠금 확인
     if post_url in done_urls:
         return True
 
     slug = url_to_slug(post_url)
-    resp = fetch_with_retry(post_url)
-    if resp is None:
+    html_text = fetch_post_html(post_url, html_index)
+    if html_text is None:
         _failed_log.record(post_url, "fetch_post_failed")
         return False
 
-    soup = BeautifulSoup(resp.text, "lxml")
+    soup = BeautifulSoup(html_text, "lxml")
 
     # 카테고리 추출 → 저장 경로 결정
     category = extract_category(soup)
@@ -563,7 +565,13 @@ def process_post(
 # ---------------------------------------------------------------------------
 
 
-def run_md(posts: list[tuple[str, str]], retry_mode: bool = False, force_download: bool = False) -> None:
+def run_md(
+    posts: list[tuple[str, str]],
+    retry_mode: bool = False,
+    force_download: bool = False,
+    html_index: "dict[str, Path] | None" = None,
+    max_workers: int = DEFAULT_MAX_WORKERS,
+) -> None:
     ensure_utf8_console()
     ROOT_DIR.mkdir(parents=True, exist_ok=True)
     MD_DIR.mkdir(parents=True, exist_ok=True)
@@ -571,7 +579,10 @@ def run_md(posts: list[tuple[str, str]], retry_mode: bool = False, force_downloa
     done_slugs = load_done_file(DONE_FILE)
     done_urls: set[str] = set() if force_download else set(done_slugs.values())
 
-    process_fn = lambda url, date: process_post(url, date, done_slugs, done_urls, image_map, force_overwrite=force_download)
+    process_fn = lambda url, date: process_post(
+        url, date, done_slugs, done_urls, image_map,
+        force_overwrite=force_download, html_index=html_index,
+    )
 
     run_pipeline(
         posts,
@@ -579,7 +590,7 @@ def run_md(posts: list[tuple[str, str]], retry_mode: bool = False, force_downloa
         _failed_log,
         retry_mode,
         label="MD",
-        max_workers=DEFAULT_MAX_WORKERS,
+        max_workers=max_workers,
     )
 
 

@@ -21,6 +21,7 @@ from utils import (
     ensure_utf8_console,
     eta_str,
     extract_category,
+    fetch_post_html,
     fetch_with_retry,
     filter_file_lines,
     load_failed_post_urls,
@@ -978,17 +979,18 @@ def process_post(
     thumb_hashes: set[str],
     hash_dup_count: dict[str, int],
     done_post_urls: set[str],
+    html_index: "dict[str, Path] | None" = None,
 ) -> PostProcessResult:
     # 이미 모든 이미지가 완료된 포스트는 HTTP fetch 없이 즉시 스킵
     if post_url in done_post_urls:
         return PostProcessResult(ok=0, fail=0, post_fetch_ok=True)
 
-    resp = fetch_with_retry(post_url)
-    if resp is None:
+    html_text = fetch_post_html(post_url, html_index)
+    if html_text is None:
         record_failed(post_url, "", "fetch_post_failed")
         return PostProcessResult(ok=0, fail=1, post_fetch_ok=False)
 
-    soup = BeautifulSoup(resp.text, "lxml")
+    soup = BeautifulSoup(html_text, "lxml")
     images = collect_image_urls(soup, post_url)
 
     # 카테고리 추출 → 저장 경로 결정
@@ -1149,7 +1151,13 @@ def _relocate_shared_images(
 # ---------------------------------------------------------------------------
 
 
-def run_images(posts: list[tuple[str, str]], retry_mode: bool = False, force_download: bool = False):
+def run_images(
+    posts: list[tuple[str, str]],
+    retry_mode: bool = False,
+    force_download: bool = False,
+    html_index: "dict[str, Path] | None" = None,
+    max_workers: int = DEFAULT_MAX_WORKERS,
+):
     ensure_utf8_console()
     ROOT_DIR.mkdir(parents=True, exist_ok=True)
     IMAGES_DIR.mkdir(parents=True, exist_ok=True)
@@ -1179,11 +1187,12 @@ def run_images(posts: list[tuple[str, str]], retry_mode: bool = False, force_dow
     completed = 0
     counter_lock = threading.Lock()
 
-    with ThreadPoolExecutor(max_workers=DEFAULT_MAX_WORKERS) as executor:
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
         future_to_post = {
             executor.submit(
                 process_post, url, date, seen_urls, img_hashes, image_map,
                 thumb_hashes, hash_dup_count, done_post_urls,
+                html_index=html_index,
             ): (url, date)
             for url, date in posts
         }
