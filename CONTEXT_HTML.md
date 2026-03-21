@@ -2,7 +2,7 @@
 
 ## 경로 상수
 
-`ROOT_DIR = Path(__file__).parent / "loh_blog"` (스크립트 위치 기준, 실행 디렉토리 무관).
+`ROOT_DIR`은 `utils.py`에서 import (`from utils import ROOT_DIR`).
 
 ## 락 구조
 

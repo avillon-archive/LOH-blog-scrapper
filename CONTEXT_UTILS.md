@@ -4,6 +4,7 @@
 
 | 이름 | 설명 |
 |------|------|
+| `ROOT_DIR` | `Path(__file__).parent / "loh_blog"` — 모든 출력 데이터의 루트 디렉터리. 각 모듈이 import하여 사용 |
 | `BLOG_HOST` | `"blog-ko.lordofheroes.com"` |
 | `BLOG_RATE_LIMIT = 10.0` | 대규모 배치(>100건) 초당 최대 요청 |
 | `BLOG_RATE_LIMIT_SMALL = 20.0` | 소규모 배치(≤100건) 초당 최대 요청 |

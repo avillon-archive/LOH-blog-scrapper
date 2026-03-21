@@ -239,6 +239,8 @@ def main():
         action="store_true",
         help="custom_posts.txt를 포스트 소스로 사용 (사이트맵 자동 갱신 건너뜀)",
     )
+    parser.add_argument("--force", action="store_true",
+                        help="기존 기록 무시하고 전체 재다운로드 (done 기록 무시)")
     parser.add_argument("--sample", type=int, help="테스트용 랜덤 샘플 개수 (all_links.txt 행 수의 10%% 상한 적용)")
     parser.add_argument("--seed", type=int, help="샘플링 고정 시드(선택)")
     args = parser.parse_args()
@@ -255,7 +257,7 @@ def main():
         parser.error("--posts / --pages / --custom 과 --sample 은 동시에 사용할 수 없습니다")
 
     # ── 파이프라인 단계 결정 ────────────────────────────────────────────
-    selected = {
+    user_selected = {
         name
         for name, enabled in (
             ("images", args.images),
@@ -264,12 +266,12 @@ def main():
         )
         if enabled
     }
-    if not selected:
-        selected = set(PIPELINE_ORDER)
-    selected.add("html")  # html 은 항상 실행 (md/images 가 저장된 HTML 을 재활용)
+    if not user_selected:
+        user_selected = set(PIPELINE_ORDER)
+    selected = user_selected | {"html"}  # html 은 항상 실행 (md/images 가 저장된 HTML 을 재활용)
 
     # ── 포스트 소스 파일 결정 ───────────────────────────────────────────
-    force_download = False
+    force_download = bool(args.force)
     if args.posts:
         posts_file = POSTS_FILE
         source_label = "all_posts.txt"
@@ -366,9 +368,12 @@ def main():
     for step in selected_order:
         print("━" * 60)
         if step == "html":
+            html_is_primary = "html" in user_selected
             print("▶ HTML 파일 저장 시작")
             print("━" * 60)
-            run_html(posts, retry_mode=args.retry, force_download=force_download,
+            run_html(posts,
+                     retry_mode=args.retry if html_is_primary else False,
+                     force_download=force_download if html_is_primary else False,
                      max_workers=max_workers)
             html_index = build_html_index(HTML_DIR, DONE_HTML_FILE)
         elif step == "images":

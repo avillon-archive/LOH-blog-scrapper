@@ -1,7 +1,8 @@
 """Image downloader for Lord of Heroes blog posts."""
 
+import csv
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import difflib
 import hashlib
 import json
@@ -13,10 +14,12 @@ import time
 from typing import NamedTuple
 import urllib.parse
 
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, Tag
 
 from utils import (
+    BLOG_HOST,
     DEFAULT_MAX_WORKERS,
+    ROOT_DIR,
     LineBuffer,
     append_line,
     SIZE_W_RE,
@@ -33,8 +36,6 @@ from utils import (
     load_posts,
     remove_lines_by_prefix,
 )
-
-ROOT_DIR = Path(__file__).parent / "loh_blog"
 IMAGES_DIR = ROOT_DIR / "images"
 DONE_FILE = ROOT_DIR / "downloaded_urls.txt"
 DONE_POSTS_FILE = ROOT_DIR / "done_posts_images.txt"  # 이미지 완료 포스트 URL 목록
@@ -46,15 +47,23 @@ MULTILANG_LOG_FILE = IMAGES_DIR / "multilang_fallback.tsv"  # 다국어 폴백 �
 MULTILANG_INDEX_CACHE = ROOT_DIR / "multilang_sitemap_index.json"  # EN/JA 사이트맵 인덱스 캐시
 
 IMG_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg"}
+ARCHIVE_EXTS = {".zip", ".rar", ".7z", ".tar", ".gz", ".tgz"}
+DOWNLOADABLE_EXTS = IMG_EXTS | ARCHIVE_EXTS
 DL_KEYWORDS = {
     "다운로드", "download", "다운", "받기", "저장",
     "고화질 이미지", "고화질", "이미지", "원본",
 }
 RESOLUTION_RE = re.compile(r"\d+\s*[xX×]\s*\d+")
-BLOG_HOST = "blog-ko.lordofheroes.com"
 GDRIVE_HOSTS = {"drive.google.com", "docs.google.com", "lh3.googleusercontent.com"}
 COMMUNITY_CDN_HOST = "community-ko-cdn.lordofheroes.com"
 WAYBACK_CDX_API = "https://web.archive.org/cdx/search/cdx"
+
+# linked_keyword 수집 시 건너뛸 도메인 (다운로드 대상이 아닌 외부 링크)
+_SKIP_LINK_HOSTS = {"forms.gle", "forms.google.com", "play.google.com", "apps.apple.com",
+                    "go.onelink.me"}
+
+# --retry 시 비이미지 다운로드 링크 감지용 키워드 (앵커 주변 소제목/강조)
+_NON_IMAGE_CONTEXT_KEYWORDS = {"bgm", "ost", "음악", "사운드트랙", "soundtrack"}
 
 # 다국어 블로그 Wayback 폴백용 상수
 MULTILANG_BLOG_HOSTS = {
@@ -70,6 +79,7 @@ KAKAO_PF_PROFILE = "_YXZqxb"
 KAKAO_PF_API = f"https://pf.kakao.com/rocket-web/web/profiles/{KAKAO_PF_PROFILE}/posts"
 KAKAO_PF_INDEX_FILE = ROOT_DIR / "kakao_pf_index.json"
 KAKAO_PF_LOG_FILE = IMAGES_DIR / "kakao_pf_log.tsv"
+FALLBACK_REPORT_FILE = ROOT_DIR / "fallback_report.csv"
 
 
 class KakaoPFPost(NamedTuple):
@@ -159,11 +169,24 @@ class ImageFailedLog:
             self._cache.add(key)
         append_line(self._filepath, f"{post_url}\t{img_url}\t{reason}")
 
-    def remove(self, post_url: str, reason: str | None = None) -> None:
+    def remove(self, post_url: str, reason: str | None = None,
+               img_url: str | None = None) -> None:
         if not self._filepath.exists():
             return
         prefix = post_url + "\t"
-        if reason is None:
+        if img_url is not None:
+            # 특정 img_url 엔트리만 제거
+            def _keep(line: str) -> bool:
+                if not line.startswith(prefix):
+                    return True
+                parts = line.split("\t")
+                return (parts[1].strip() if len(parts) >= 2 else "") != img_url
+            filter_file_lines(self._filepath, _keep)
+            with self._lock:
+                if self._cache is None:
+                    self._cache = self._load()
+                self._cache = {e for e in self._cache if not (e[0] == post_url and e[1] == img_url)}
+        elif reason is None:
             remove_lines_by_prefix(self._filepath, prefix)
             with self._lock:
                 if self._cache is None:
@@ -180,6 +203,24 @@ class ImageFailedLog:
                 if self._cache is None:
                     self._cache = self._load()
                 self._cache = {e for e in self._cache if not (e[0] == post_url and e[2] == reason)}
+
+    def remove_batch(self, post_url: str, img_urls: set[str]) -> None:
+        """post_url에 속하는 여러 img_url 엔트리를 한 번의 파일 I/O로 제거한다."""
+        if not img_urls or not self._filepath.exists():
+            return
+        prefix = post_url + "\t"
+
+        def _keep(line: str) -> bool:
+            if not line.startswith(prefix):
+                return True
+            parts = line.split("\t")
+            return (parts[1].strip() if len(parts) >= 2 else "") not in img_urls
+        filter_file_lines(self._filepath, _keep)
+        with self._lock:
+            if self._cache is None:
+                self._cache = self._load()
+            self._cache = {e for e in self._cache
+                           if not (e[0] == post_url and e[1] in img_urls)}
 
     def load_post_urls(self) -> set[str]:
         return load_failed_post_urls(self._filepath)
@@ -198,9 +239,11 @@ class PostProcessResult:
     ok: int
     fail: int
     post_fetch_ok: bool
+    ok_saved: int = 0
     ok_original: int = 0
     ok_multilang: int = 0
     ok_kakao: int = 0
+    succeeded_urls: list[str] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -271,7 +314,7 @@ def _load_or_build_img_hashes() -> tuple[dict[str, str], set[str]]:
         for file_path in IMAGES_DIR.rglob("*"):
             if not file_path.is_file():
                 continue
-            if file_path.suffix.lower() not in IMG_EXTS:
+            if file_path.suffix.lower() not in DOWNLOADABLE_EXTS:
                 continue
             try:
                 h = _sha256_bytes(file_path.read_bytes())
@@ -300,12 +343,17 @@ def _load_or_build_img_hashes() -> tuple[dict[str, str], set[str]]:
 # ---------------------------------------------------------------------------
 
 
+def _clean_img_url(url: str) -> str:
+    """이미지 URL 정규화: ref 파라미터 제거 + clean_url."""
+    return clean_url(_strip_ref_param(url))
+
+
 def _seen_scope(utype: str) -> str:
     return "thumb" if utype == "og_image" else "main"
 
 
 def _seen_key(utype: str, url: str) -> str:
-    return f"{_seen_scope(utype)}:{clean_url(url)}"
+    return f"{_seen_scope(utype)}:{_clean_img_url(url)}"
 
 
 def _is_community_cdn(url: str) -> bool:
@@ -337,7 +385,8 @@ def _ext_from_mime(mime: str) -> str:
 
 def _basename(url: str) -> str:
     path = urllib.parse.urlparse(url).path
-    return Path(path).name or ""
+    name = Path(path).name or ""
+    return urllib.parse.unquote(name) if name else ""
 
 
 def _safe_filename(name: str) -> str:
@@ -407,15 +456,20 @@ def record_image_map(
 # ---------------------------------------------------------------------------
 
 
-def _load_done_post_urls(filepath: Path) -> set[str]:
-    """이미지 수집이 완료된 포스트 URL 목록을 반환한다."""
+def _load_done_post_urls(filepath: Path) -> dict[str, int]:
+    """이미지 수집이 완료된 포스트 URL → 이미지 수 딕셔너리를 반환한다."""
     if not filepath.exists():
-        return set()
-    return {
-        line.strip()
-        for line in filepath.read_text(encoding="utf-8").splitlines()
-        if line.strip()
-    }
+        return {}
+    result: dict[str, int] = {}
+    for line in filepath.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        parts = line.split("\t")
+        url = parts[0].strip()
+        count = int(parts[1]) if len(parts) >= 2 and parts[1].strip().isdigit() else 0
+        result[url] = count
+    return result
 
 
 def _parse_done_line_to_main_url(row: str) -> str | None:
@@ -445,9 +499,15 @@ def record_failed(post_url: str, img_url: str, reason: str) -> None:
     _failed_log.record(post_url, img_url, reason)
 
 
-def remove_from_failed(post_url: str, reason: str | None = None) -> None:
+def remove_from_failed(post_url: str, reason: str | None = None,
+                       img_url: str | None = None) -> None:
     """_failed_log.remove 의 모듈 수준 래퍼."""
-    _failed_log.remove(post_url, reason)
+    _failed_log.remove(post_url, reason, img_url=img_url)
+
+
+def remove_from_failed_batch(post_url: str, img_urls: set[str]) -> None:
+    """_failed_log.remove_batch 의 모듈 수준 래퍼."""
+    _failed_log.remove_batch(post_url, img_urls)
 
 
 # ---------------------------------------------------------------------------
@@ -455,7 +515,7 @@ def remove_from_failed(post_url: str, reason: str | None = None) -> None:
 # ---------------------------------------------------------------------------
 
 
-def backfill_image_map():
+def backfill_image_map() -> None:
     ROOT_DIR.mkdir(parents=True, exist_ok=True)
     image_map = load_image_map(IMAGE_MAP_FILE)
 
@@ -463,7 +523,7 @@ def backfill_image_map():
         f
         for f in IMAGES_DIR.rglob("*")
         if f.is_file()
-        and f.suffix.lower() in IMG_EXTS
+        and f.suffix.lower() in DOWNLOADABLE_EXTS
         and "thumbnails" not in f.relative_to(IMAGES_DIR).parts
     ]
 
@@ -477,7 +537,7 @@ def backfill_image_map():
             url = _parse_done_line_to_main_url(line.strip())
             if not url:
                 continue
-            key = clean_url(url)
+            key = _clean_img_url(url)
             if key in image_map:
                 continue
             base = _basename(url)
@@ -506,6 +566,19 @@ def backfill_image_map():
 # ---------------------------------------------------------------------------
 
 
+def _strip_ref_param(url: str) -> str:
+    """URL에서 ref 쿼리 파라미터를 제거한다 (Ghost CMS 참조 추적용)."""
+    parsed = urllib.parse.urlparse(url)
+    if not parsed.query:
+        return url
+    params = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
+    if "ref" not in params:
+        return url
+    params.pop("ref")
+    new_query = urllib.parse.urlencode(params, doseq=True)
+    return urllib.parse.urlunparse(parsed._replace(query=new_query))
+
+
 def _wayback_oldest(url: str) -> str | None:
     """Wayback CDX API에서 가장 오래된 200 스냅샷 URL을 반환한다.
 
@@ -513,6 +586,7 @@ def _wayback_oldest(url: str) -> str | None:
     이벤트 기반 대기를 사용한다. 먼저 도달한 스레드가 fetch를 수행하고,
     나중에 도달한 스레드는 완료 이벤트를 기다린 뒤 캐시에서 결과를 읽는다.
     """
+    url = _strip_ref_param(url)
     with _wayback_cache_lock:
         if url in _wayback_cache:
             return _wayback_cache[url]
@@ -532,9 +606,8 @@ def _wayback_oldest(url: str) -> str | None:
     params = {
         "url": url,
         "output": "json",
-        "fl": "timestamp,original",
-        "filter": "statuscode:200",
-        "limit": "1",
+        "fl": "timestamp,original,statuscode",
+        "limit": "5",
     }
     result: str | None = None
     try:
@@ -543,12 +616,17 @@ def _wayback_oldest(url: str) -> str | None:
             try:
                 rows = resp.json()
                 if isinstance(rows, list) and len(rows) >= 2:
-                    first = rows[1]
-                    if isinstance(first, list) and len(first) >= 2:
-                        timestamp = str(first[0]).strip()
-                        original = str(first[1]).strip()
+                    for row in rows[1:]:
+                        if not isinstance(row, list) or len(row) < 3:
+                            continue
+                        status = str(row[2]).strip()
+                        if not status.startswith(("2", "3")):
+                            continue
+                        timestamp = str(row[0]).strip()
+                        original = str(row[1]).strip()
                         if timestamp and original:
                             result = f"https://web.archive.org/web/{timestamp}/{original}"
+                            break
             except Exception:
                 pass
     finally:
@@ -586,7 +664,13 @@ def _filename_from_cd(cd: str) -> str:
             pass
     match = re.search(r'filename\s*=\s*"?([^";]+)"?', cd, re.IGNORECASE)
     if match:
-        return match.group(1).strip().strip('"')
+        name = match.group(1).strip().strip('"')
+        # requests는 HTTP 헤더를 latin-1로 디코딩하므로, raw UTF-8이 포함된 경우 복원
+        try:
+            name = name.encode("latin-1").decode("utf-8")
+        except (UnicodeDecodeError, UnicodeEncodeError):
+            pass
+        return name
     return ""
 
 
@@ -594,10 +678,23 @@ def _is_image_ct(content_type: str) -> bool:
     return content_type.lower().startswith("image/")
 
 
+_ARCHIVE_CONTENT_TYPES = {
+    "application/zip", "application/x-zip-compressed",
+    "application/x-rar-compressed", "application/x-7z-compressed",
+    "application/gzip", "application/x-tar",
+    "application/octet-stream",
+}
+
+
+def _is_archive_ct(content_type: str) -> bool:
+    return content_type.lower().split(";")[0].strip() in _ARCHIVE_CONTENT_TYPES
+
+
 def _response_to_image(
     resp,
     *,
     allow_ext_fallback: bool = False,
+    allow_archive: bool = False,
     min_bytes: int = 1,
 ) -> tuple[bytes, str, str, str] | None:
     if not resp or not getattr(resp, "content", None):
@@ -607,8 +704,12 @@ def _response_to_image(
         return None
     content_type = resp.headers.get("Content-Type", "")
     is_image_type = _is_image_ct(content_type)
-    has_image_ext = Path(urllib.parse.urlparse(resp.url).path).suffix.lower() in IMG_EXTS
-    if not is_image_type and not (allow_ext_fallback and has_image_ext):
+    url_ext = Path(urllib.parse.urlparse(resp.url).path).suffix.lower()
+    has_image_ext = url_ext in IMG_EXTS
+    is_acceptable = (is_image_type
+                     or (allow_ext_fallback and has_image_ext)
+                     or (allow_archive and (_is_archive_ct(content_type) or url_ext in ARCHIVE_EXTS)))
+    if not is_acceptable:
         return None
     return (
         content,
@@ -622,26 +723,51 @@ def _fetch_image(
     url: str,
     *,
     allow_ext_fallback: bool = False,
+    allow_archive: bool = False,
     min_bytes: int = 1,
 ) -> tuple[bytes, str, str, str] | None:
     resp = fetch_with_retry(url, allow_redirects=True)
-    return _response_to_image(resp, allow_ext_fallback=allow_ext_fallback, min_bytes=min_bytes)
+    return _response_to_image(resp, allow_ext_fallback=allow_ext_fallback,
+                              allow_archive=allow_archive, min_bytes=min_bytes)
 
 
 def _fetch_wayback_image(
     url: str,
     *,
     allow_ext_fallback: bool = False,
+    allow_archive: bool = False,
     min_bytes: int = 1,
 ) -> tuple[bytes, str, str, str] | None:
     wayback_url = _wayback_oldest(url)
     if not wayback_url:
         return None
-    return _fetch_image(
-        _add_im(wayback_url),
-        allow_ext_fallback=allow_ext_fallback,
-        min_bytes=min_bytes,
-    )
+
+    fetch_kwargs = dict(allow_ext_fallback=allow_ext_fallback,
+                        allow_archive=allow_archive, min_bytes=min_bytes)
+
+    # Wayback redirect 대응: redirect를 따라가 원본 대상 URL을 추출,
+    # 원본을 직접 fetch 시도 (Wayback im_ 경유보다 빠름).
+    resp = fetch_with_retry(wayback_url, allow_redirects=True)
+    if resp is not None:
+        # Wayback 응답 자체가 유효한 이미지/아카이브이면 그대로 반환
+        direct = _response_to_image(resp, **fetch_kwargs)
+        if direct is not None:
+            return direct
+        # redirect 발생 시 원본 대상 URL 추출 → 직접 fetch → 실패 시 대상의 Wayback 시도
+        original_target = _original_url_from_wayback(resp.url)
+        if original_target and _normalized_link_key(original_target) != _normalized_link_key(url):
+            result = _fetch_image(original_target, **fetch_kwargs)
+            if result is not None:
+                return result
+            # redirect 대상 URL의 Wayback 스냅샷 시도 (원본이 현재 죽었을 수 있음)
+            target_wayback = _wayback_oldest(original_target)
+            if target_wayback:
+                result = _fetch_image(_add_im(target_wayback), **fetch_kwargs)
+                if result is not None:
+                    return result
+
+    # 폴백: Wayback im_ 경유
+    return _fetch_image(_add_im(wayback_url), **fetch_kwargs)
 
 
 def _fetch_wayback_post_soup(
@@ -705,6 +831,17 @@ def _fetch_wayback_gdrive_from_post(
     return None
 
 
+def _get_content_tag(soup: BeautifulSoup) -> Tag | BeautifulSoup:
+    """Ghost CMS 본문 컨테이너를 반환한다 (좁은 범위 우선)."""
+    return (
+        soup.select_one(".gh-content")
+        or soup.select_one(".post-content")
+        or soup.select_one("article")
+        or soup.find("main")
+        or soup
+    )
+
+
 def _fetch_wayback_img_from_post(
     post_url: str,
     original_img_url: str,
@@ -746,6 +883,8 @@ def _fetch_wayback_linked_from_post(
     post_url: str,
     original_link: str,
     post_soup_cache: dict[str, tuple[BeautifulSoup, str] | None] | None = None,
+    *,
+    allow_archive: bool = False,
 ) -> tuple[bytes, str, str, str] | None:
     soup_with_base = _fetch_wayback_post_soup(post_url, post_soup_cache)
     if not soup_with_base:
@@ -762,7 +901,7 @@ def _fetch_wayback_linked_from_post(
         href_key = _normalized_link_key(absolute_href)
         if target_key != href_key:
             continue
-        image = _fetch_image(_add_im(absolute_href))
+        image = _fetch_image(_add_im(absolute_href), allow_archive=allow_archive)
         if image:
             return image
 
@@ -962,13 +1101,7 @@ def _fetch_wayback_img_by_position(
         return None
 
     # 본문 이미지 수집 (호스트 무관하게 모든 <img> 태그)
-    content_tag = (
-        soup.select_one(".gh-content")
-        or soup.select_one(".post-content")
-        or soup.select_one("article")
-        or soup.find("main")
-        or soup
-    )
+    content_tag = _get_content_tag(soup)
     img_urls: list[str] = []
     for img in content_tag.find_all("img"):
         if "author-profile-image" in (img.get("class") or []):
@@ -1285,26 +1418,19 @@ def collect_image_urls(soup: BeautifulSoup, post_url: str) -> list[tuple[str, st
     def _add(url: str, utype: str):
         if not url or not url.startswith("http"):
             return
+        url = _clean_img_url(url)
         scope = "thumb" if utype == "og_image" else "main"
-        key = (scope, clean_url(url))
+        key = (scope, url)
         if key in seen_keys:
             return
         seen_keys.add(key)
-        results.append((clean_url(url), utype))
+        results.append((url, utype))
 
     og = soup.find("meta", property="og:image")
     if og and og.get("content"):
         _add(og["content"], "og_image")
 
-    # 본문 범위를 가능한 좁게 잡아 author bio 등 비본문 이미지를 배제한다.
-    # Ghost 구조: .gh-content > .post-content > article > main 순으로 좁은 범위 우선.
-    content_tag = (
-        soup.select_one(".gh-content")
-        or soup.select_one(".post-content")
-        or soup.select_one("article")
-        or soup.find("main")
-        or soup
-    )
+    content_tag = _get_content_tag(soup)
 
     for img in content_tag.find_all("img"):
         if "author-profile-image" in (img.get("class") or []):
@@ -1334,10 +1460,15 @@ def collect_image_urls(soup: BeautifulSoup, post_url: str) -> list[tuple[str, st
         abs_href = urllib.parse.urljoin(post_url, href)
         parsed = urllib.parse.urlparse(abs_href)
         if parsed.hostname in GDRIVE_HOSTS:
+            path_lower = parsed.path.lower()
+            if "/spreadsheets/" in path_lower or "/forms/" in path_lower:
+                continue
             _add(abs_href, "gdrive")
             continue
+        if parsed.hostname in _SKIP_LINK_HOSTS:
+            continue
         path_ext = Path(parsed.path).suffix.lower()
-        if path_ext in IMG_EXTS:
+        if path_ext in DOWNLOADABLE_EXTS:
             _add(abs_href, "linked_direct")
             continue
         anchor_text = anchor.get_text(strip=True)
@@ -1347,6 +1478,32 @@ def collect_image_urls(soup: BeautifulSoup, post_url: str) -> list[tuple[str, st
             _add(abs_href, "linked_keyword")
 
     return results
+
+
+def _detect_non_image_urls(soup: BeautifulSoup, post_url: str) -> set[str]:
+    """주변 컨텍스트에서 BGM 등 비이미지 키워드가 감지된 다운로드 URL을 반환한다."""
+    skip_urls: set[str] = set()
+    content_tag = _get_content_tag(soup)
+    for anchor in content_tag.find_all("a", href=True):
+        href = anchor["href"].strip()
+        if not href or href.startswith(("#", "mailto:")):
+            continue
+        abs_href = urllib.parse.urljoin(post_url, href)
+        parsed = urllib.parse.urlparse(abs_href)
+        if parsed.hostname not in GDRIVE_HOSTS:
+            continue
+        # 앵커 텍스트에서 비이미지 키워드 검색
+        anchor_text = anchor.get_text(strip=True).lower()
+        if any(kw in anchor_text for kw in _NON_IMAGE_CONTEXT_KEYWORDS):
+            skip_urls.add(_clean_img_url(abs_href))
+            continue
+        # 가장 가까운 앞쪽 heading(h1-h6)에서 비이미지 키워드 검색
+        for prev in anchor.find_all_previous(["h1", "h2", "h3", "h4", "h5", "h6"]):
+            text = prev.get_text(strip=True).lower()
+            if any(kw in text for kw in _NON_IMAGE_CONTEXT_KEYWORDS):
+                skip_urls.add(_clean_img_url(abs_href))
+            break  # 가장 가까운 heading 하나만
+    return skip_urls
 
 
 # ---------------------------------------------------------------------------
@@ -1377,10 +1534,10 @@ def _determine_filename(
         if cd_name:
             return cd_name
         final_base = _basename(final_url)
-        if final_base and Path(final_base).suffix.lower() in IMG_EXTS:
+        if final_base and Path(final_base).suffix.lower() in DOWNLOADABLE_EXTS:
             return final_base
         original_base = _basename(original_href)
-        if original_base and Path(original_base).suffix.lower() in IMG_EXTS:
+        if original_base and Path(original_base).suffix.lower() in DOWNLOADABLE_EXTS:
             return original_base
         return f"image_{idx}{_ext_from_mime(content_type)}"
 
@@ -1450,6 +1607,7 @@ def _rename_fallback_images() -> int:
         log_file.write_text("\n".join(new_lines) + ("\n" if new_lines else ""),
                             encoding="utf-8")
     return renamed
+
 
 
 # ---------------------------------------------------------------------------
@@ -1668,9 +1826,8 @@ def download_one_image(
     *,
     post_date: str = "",
     blog_title: str = "",
-    multilang_fallback: bool = False,
+    retry_mode: bool = False,
     multilang_date_index: dict[str, list[tuple[str, str]]] | None = None,
-    kakao_pf_fallback: bool = False,
     kakao_pf_index: dict[str, list[KakaoPFPost]] | None = None,
 ) -> str:
     """이미지 1건 다운로드. 성공 방식을 나타내는 문자열을 반환한다.
@@ -1706,31 +1863,32 @@ def download_one_image(
             payload = _fetch_wayback_gdrive_from_post(post_url, img_url, post_soup_cache)
 
     elif utype == "linked_keyword":
-        payload = _fetch_image(img_url)
+        payload = _fetch_image(img_url, allow_archive=True)
         if payload is None:
-            payload = _fetch_wayback_image(img_url)
+            payload = _fetch_wayback_image(img_url, allow_archive=True)
         if payload is None:
-            payload = _fetch_wayback_linked_from_post(post_url, img_url, post_soup_cache)
+            payload = _fetch_wayback_linked_from_post(post_url, img_url, post_soup_cache,
+                                                     allow_archive=True)
 
     elif utype == "linked_direct":
-        payload = _fetch_image(img_url, allow_ext_fallback=True)
+        payload = _fetch_image(img_url, allow_ext_fallback=True, allow_archive=True)
         if payload is None and _is_community_cdn(img_url):
-            payload = _fetch_wayback_image(img_url, allow_ext_fallback=True)
+            payload = _fetch_wayback_image(img_url, allow_ext_fallback=True, allow_archive=True)
 
     # ── Kakao PF 폴백 (retry 모드 전용) ──────────────────────────────────
     kakao_pf_result: tuple[bytes, str, str, str, str] | None = None
-    if payload is None and kakao_pf_fallback and utype != "linked_direct":
+    if payload is None and retry_mode and kakao_pf_index and utype != "linked_direct":
         kakao_pf_result = _fetch_kakao_pf_image(
             post_url, img_url, post_date, utype, idx,
-            kakao_pf_index or {}, blog_title=blog_title,
+            kakao_pf_index, blog_title=blog_title,
         )
 
     # ── 다국어 Wayback 폴백 (retry 모드 전용) ────────────────────────────
     multilang_result: tuple[bytes, str, str, str, str] | None = None
-    if payload is None and multilang_fallback and utype != "linked_direct":
+    if payload is None and retry_mode and multilang_date_index and utype != "linked_direct":
         multilang_result = _fetch_multilang_wayback_image(
             post_url, img_url, post_date, utype, idx,
-            multilang_date_index or {}, post_soup_cache,
+            multilang_date_index, post_soup_cache,
         )
 
     # ── 폴백 결과 선택 ────────────────────────────────────────────────────
@@ -1791,14 +1949,14 @@ def download_one_image(
             # 해시 중복: 같은 콘텐츠가 이미 저장됨 → 저장 생략, 경로만 매핑
             seen_urls.add(seen_key)
             hash_dup_count[content_hash] = hash_dup_count.get(content_hash, 0) + 1
-            img_key = clean_url(img_url)
+            img_key = _clean_img_url(img_url)
             if img_key not in image_map:
                 image_map[img_key] = existing_rel
                 _map_buf.add(f"{img_key}\t{existing_rel}")
             should_save = False
         else:
             seen_urls.add(seen_key)
-            img_key = clean_url(img_url)
+            img_key = _clean_img_url(img_url)
             if utype == "og_image":
                 thumb_hashes.add(content_hash)
             should_save = True
@@ -1835,20 +1993,22 @@ def download_one_image(
             # alt 로그 기록
             if alt_rel and alt_source:
                 if alt_source.startswith("http://pf.kakao.com/"):
-                    _kakao_pf_log_buf.add(f"{alt_rel}\t{post_url}\t{alt_source}")
+                    _kakao_pf_log_buf.add(f"{alt_rel}\t{post_url}\t{alt_source}\t{img_url}")
                 else:
-                    _multilang_log_buf.add(f"{alt_rel}\t{post_url}\t{alt_source}")
+                    _multilang_log_buf.add(f"{alt_rel}\t{post_url}\t{alt_source}\t{img_url}")
 
     # ── 폴백 성공 로그 기록 ───────────────────────────────────────────────
     if primary_source is not None and primary_rel:
         if kakao_pf_result and primary_source == kakao_pf_result[4]:
             # primary가 Kakao PF
-            _kakao_pf_log_buf.add(f"{primary_rel}\t{post_url}\t{primary_source}")
+            _kakao_pf_log_buf.add(f"{primary_rel}\t{post_url}\t{primary_source}\t{img_url}")
         elif multilang_result and primary_source == multilang_result[4]:
             # primary가 multilang
-            _multilang_log_buf.add(f"{primary_rel}\t{post_url}\t{primary_source}")
+            _multilang_log_buf.add(f"{primary_rel}\t{post_url}\t{primary_source}\t{img_url}")
 
-    # 성공 방식 판별
+    # 성공 방식 판별 (해시 중복으로 저장 생략된 경우 "dup")
+    if not should_save:
+        return "dup"
     if primary_source is None:
         return "original"
     if primary_source.startswith("http://pf.kakao.com/"):
@@ -1869,29 +2029,34 @@ def process_post(
     image_map: dict[str, str],
     thumb_hashes: set[str],
     hash_dup_count: dict[str, int],
-    done_post_urls: set[str],
+    done_post_urls: dict[str, int],
     html_index: "dict[str, Path] | None" = None,
     *,
-    multilang_fallback: bool = False,
+    retry_mode: bool = False,
     multilang_date_index: dict[str, list[tuple[str, str]]] | None = None,
-    kakao_pf_fallback: bool = False,
     kakao_pf_index: dict[str, list[KakaoPFPost]] | None = None,
 ) -> PostProcessResult:
-    # 이미 모든 이미지가 완료된 포스트는 HTTP fetch 없이 즉시 스킵
-    if post_url in done_post_urls:
+    # 이미 모든 이미지가 완료된 포스트 스킵
+    if post_url in done_post_urls and not retry_mode:
         return PostProcessResult(ok=0, fail=0, post_fetch_ok=True)
 
     html_text = fetch_post_html(post_url, html_index)
     if html_text is None:
+        if post_url in done_post_urls:
+            return PostProcessResult(ok=0, fail=0, post_fetch_ok=True)
         record_failed(post_url, "", "fetch_post_failed")
         return PostProcessResult(ok=0, fail=1, post_fetch_ok=False)
 
     soup = BeautifulSoup(html_text, "lxml")
     images = collect_image_urls(soup, post_url)
 
+    # retry 모드: 이미지 수가 동일하면 스킵
+    if post_url in done_post_urls and len(images) == done_post_urls[post_url]:
+        return PostProcessResult(ok=0, fail=0, post_fetch_ok=True)
+
     # 블로그 포스트 제목 추출 (Kakao PF 매칭용)
     blog_title = ""
-    if kakao_pf_fallback:
+    if retry_mode and kakao_pf_index:
         title_tag = soup.find("title")
         if title_tag and title_tag.string:
             blog_title = title_tag.string.strip()
@@ -1900,14 +2065,23 @@ def process_post(
             if h1:
                 blog_title = h1.get_text(strip=True)
 
+    # 비이미지 다운로드 링크(BGM 등) 감지 → 다운로드 건너뛰기
+    non_image_urls = _detect_non_image_urls(soup, post_url)
+    if retry_mode:
+        for skip_url in non_image_urls:
+            remove_from_failed(post_url, img_url=skip_url)
+
     # 카테고리 추출 → 저장 경로 결정
     category = extract_category(soup)
     date_folder = date_to_folder(post_date)
     folder = IMAGES_DIR / (category or "etc") / date_folder
 
-    ok = fail = ok_original = ok_multilang = ok_kakao = 0
+    ok = fail = ok_saved = ok_original = ok_multilang = ok_kakao = 0
+    succeeded_urls: list[str] = []
     post_soup_cache: dict[str, tuple[BeautifulSoup, str] | None] = {}
     for idx, (img_url, utype) in enumerate(images, start=1):
+        if _clean_img_url(img_url) in non_image_urls:
+            continue
         how = download_one_image(
             img_url,
             utype,
@@ -1922,30 +2096,35 @@ def process_post(
             post_soup_cache=post_soup_cache,
             post_date=post_date,
             blog_title=blog_title,
-            multilang_fallback=multilang_fallback,
+            retry_mode=retry_mode,
             multilang_date_index=multilang_date_index,
-            kakao_pf_fallback=kakao_pf_fallback,
             kakao_pf_index=kakao_pf_index,
         )
         if how:
             ok += 1
-            if how == "original":
-                ok_original += 1
-            elif how == "multilang":
-                ok_multilang += 1
-            elif how == "kakao":
-                ok_kakao += 1
+            succeeded_urls.append(img_url)
+            if how in ("already", "dup"):
+                pass  # 기존 파일 또는 해시 중복 — 새 저장 아님
+            else:
+                ok_saved += 1
+                if how == "original":
+                    ok_original += 1
+                elif how == "multilang":
+                    ok_multilang += 1
+                elif how == "kakao":
+                    ok_kakao += 1
         else:
             fail += 1
 
     # 포스트 내 모든 이미지가 성공한 경우 완료로 기록 (이미지가 없는 포스트 포함)
     if fail == 0:
-        done_post_urls.add(post_url)
-        _done_posts_buf.add(post_url)
+        done_post_urls[post_url] = len(images)
+        _done_posts_buf.add(f"{post_url}\t{len(images)}")
 
     return PostProcessResult(ok=ok, fail=fail, post_fetch_ok=True,
-                             ok_original=ok_original, ok_multilang=ok_multilang,
-                             ok_kakao=ok_kakao)
+                             ok_saved=ok_saved, ok_original=ok_original,
+                             ok_multilang=ok_multilang, ok_kakao=ok_kakao,
+                             succeeded_urls=succeeded_urls)
 
 
 # ---------------------------------------------------------------------------
@@ -2057,6 +2236,44 @@ def _relocate_shared_images(
     return moved
 
 
+def _generate_fallback_csv() -> int:
+    """Kakao PF / 다국어 Wayback 폴백 로그를 읽어 CSV 리포트를 생성한다.
+
+    Returns:
+        CSV에 기록된 행 수.
+    """
+    rows: list[list[str]] = []
+    for log_file, fallback_type in [
+        (KAKAO_PF_LOG_FILE, "kakao"),
+        (MULTILANG_LOG_FILE, "multilang"),
+    ]:
+        if not log_file.exists():
+            continue
+        for line in log_file.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            parts = line.split("\t")
+            if len(parts) < 3:
+                continue
+            saved_path = parts[0]
+            post_url = parts[1]
+            source_url = parts[2]
+            original_img_url = parts[3] if len(parts) >= 4 else ""
+            rows.append([post_url, original_img_url, fallback_type, saved_path, source_url])
+
+    if not rows:
+        return 0
+
+    rows.sort(key=lambda r: (r[0], r[2], r[3]))
+    with open(FALLBACK_REPORT_FILE, "w", encoding="utf-8-sig", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(["post_url", "original_img_url", "fallback_type", "saved_path", "source_url"])
+        writer.writerows(rows)
+
+    return len(rows)
+
+
 # ---------------------------------------------------------------------------
 # 실행 진입점
 # ---------------------------------------------------------------------------
@@ -2088,11 +2305,11 @@ def run_images(
     if retry_multilang or retry_kakaopf:
         return
 
-    seen_urls = load_seen(DONE_FILE)
+    seen_urls = set() if force_download else load_seen(DONE_FILE)
     img_hashes, thumb_hashes = _load_or_build_img_hashes()
     hash_dup_count: dict[str, int] = {}
     image_map = load_image_map(IMAGE_MAP_FILE)
-    done_post_urls: set[str] = set() if force_download else _load_done_post_urls(DONE_POSTS_FILE)
+    done_post_urls: dict[str, int] = {} if (force_download or retry_mode) else _load_done_post_urls(DONE_POSTS_FILE)
 
     if retry_mode:
         if not FAILED_FILE.exists():
@@ -2106,16 +2323,14 @@ def run_images(
             return
 
     # 다국어 Wayback 폴백 (retry 모드에서만 활성화)
-    multilang_fallback = retry_mode
     multilang_date_index: dict[str, list[tuple[str, str]]] = {}
-    if multilang_fallback:
+    if retry_mode:
         print("[이미지] 다국어 Wayback 폴백 활성화: EN/JA 사이트맵 인덱스 구축 중...")
         multilang_date_index = _build_multilang_date_index()
 
     # Kakao PF 폴백 (retry 모드에서만 활성화)
-    kakao_pf_fallback = retry_mode
     kakao_pf_index: dict[str, list[KakaoPFPost]] = {}
-    if kakao_pf_fallback:
+    if retry_mode:
         print("[이미지] Kakao PF 폴백 활성화: 게시글 인덱스 구축 중...")
         kakao_pf_index = _build_kakao_pf_index()
         if kakao_pf_index:
@@ -2127,6 +2342,7 @@ def run_images(
     report_interval = 10 if total <= 100 else 50
     start = time.time()
     total_ok = 0
+    total_saved = 0
     total_fail = 0
     total_original = 0
     total_multilang = 0
@@ -2144,9 +2360,8 @@ def run_images(
                 process_post, url, date, seen_urls, img_hashes, image_map,
                 thumb_hashes, hash_dup_count, done_post_urls,
                 html_index=html_index,
-                multilang_fallback=multilang_fallback,
+                retry_mode=retry_mode,
                 multilang_date_index=multilang_date_index,
-                kakao_pf_fallback=kakao_pf_fallback,
                 kakao_pf_index=kakao_pf_index,
             ): (url, date)
             for url, date in posts
@@ -2161,6 +2376,7 @@ def run_images(
 
             with counter_lock:
                 total_ok += result.ok
+                total_saved += result.ok_saved
                 total_fail += result.fail
                 total_original += result.ok_original
                 total_multilang += result.ok_multilang
@@ -2170,17 +2386,18 @@ def run_images(
 
             if retry_mode and result.post_fetch_ok:
                 remove_from_failed(post_url, reason="fetch_post_failed")
-                if result.fail == 0 and result.ok > 0:
-                    remove_from_failed(post_url, reason="download_failed")
+                if result.succeeded_urls:
+                    remove_from_failed_batch(post_url, set(result.succeeded_urls))
 
             if cur_completed % report_interval == 0 or cur_completed == total:
                 eta = eta_str(cur_completed, total, start)
+                existing = total_ok - total_saved
                 if retry_mode:
-                    print(f"  {eta} 성공={total_ok} "
+                    print(f"  {eta} 저장={total_saved} "
                           f"(원본={total_original} multilang={total_multilang} "
-                          f"kakao={total_kakao}) 실패={total_fail}")
+                          f"kakao={total_kakao}) 기존={existing} 실패={total_fail}")
                 else:
-                    print(f"  {eta} 성공={total_ok} 실패={total_fail}")
+                    print(f"  {eta} 저장={total_saved} 기존={existing} 실패={total_fail}")
 
     # 모든 worker 완료 후 버퍼 잔량을 파일에 flush
     _done_buf.flush_all()
@@ -2190,18 +2407,25 @@ def run_images(
     _multilang_log_buf.flush_all()
     _kakao_pf_log_buf.flush_all()
 
-    # Phase 2: 재사용 이미지를 카테고리 루트로 이동
-    if hash_dup_count:
+    # Phase 2: 재사용 이미지를 카테고리 루트로 이동 (force 모드에서는 건너뜀)
+    if hash_dup_count and not force_download:
         moved = _relocate_shared_images(img_hashes, thumb_hashes, hash_dup_count, image_map)
         if moved:
             print(f"[이미지] 공유 이미지 {moved}개 재배치 완료")
 
+    # 폴백 CSV 리포트 생성 (retry 시)
     if retry_mode:
-        print(f"\n[이미지 완료] 성공={total_ok} "
+        csv_count = _generate_fallback_csv()
+        if csv_count:
+            print(f"[이미지] 폴백 리포트: {FALLBACK_REPORT_FILE} ({csv_count}건)")
+
+    existing = total_ok - total_saved
+    if retry_mode:
+        print(f"\n[이미지 완료] 저장={total_saved} "
               f"(원본={total_original} multilang={total_multilang} "
-              f"kakao={total_kakao}) 실패={total_fail}")
+              f"kakao={total_kakao}) 기존={existing} 실패={total_fail}")
     else:
-        print(f"\n[이미지 완료] 성공={total_ok}, 실패={total_fail}")
+        print(f"\n[이미지 완료] 저장={total_saved} 기존={existing} 실패={total_fail}")
 
 
 if __name__ == "__main__":

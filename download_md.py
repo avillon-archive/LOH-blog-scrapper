@@ -9,6 +9,7 @@ from bs4 import BeautifulSoup, NavigableString, Tag
 
 from utils import (
     DEFAULT_MAX_WORKERS,
+    ROOT_DIR,
     FailedLog,
     clean_url,
     ensure_utf8_console,
@@ -22,8 +23,6 @@ from utils import (
     url_to_slug,
     write_text_unique,
 )
-
-ROOT_DIR = Path(__file__).parent / "loh_blog"
 MD_DIR = ROOT_DIR / "md"
 DONE_FILE = ROOT_DIR / "done_md.txt"
 FAILED_FILE = ROOT_DIR / "failed_md.txt"
@@ -41,6 +40,13 @@ BLOCK_CONTAINERS = {
     "nav",
 }
 
+# post_to_md에서 사용하는 사전 컴파일 정규식
+_TITLE_CLASS_RE = re.compile(r"post-title|article-title", re.I)
+_BODY_CLASS_RE = re.compile(r"post-content|article-body|gh-content", re.I)
+_UNWANTED_CLASS_RE = re.compile(
+    r"post-share|post-tags|post-nav|related-posts|comments", re.I
+)
+
 # done_map / done_urls 갱신을 원자적으로 처리
 _md_done_lock = threading.Lock()
 # FailedLog 내부 캐시 보호 전용 (done 락과 분리해 불필요한 경합 방지)
@@ -55,7 +61,7 @@ _failed_log = FailedLog(FAILED_FILE, _md_fail_lock)
 # ---------------------------------------------------------------------------
 
 
-def _append_block(md_lines: list[str], text: str):
+def _append_block(md_lines: list[str], text: str) -> None:
     if text:
         md_lines.append(text)
         md_lines.append("")
@@ -331,7 +337,7 @@ def _append_blockquote(
     md_lines.append("")
 
 
-def _append_pre(elem: Tag, md_lines: list[str]):
+def _append_pre(elem: Tag, md_lines: list[str]) -> None:
     code_tag = elem.find("code")
     code_text = (code_tag or elem).get_text()
     lang = ""
@@ -449,7 +455,7 @@ def post_to_md(
 ) -> str:
     md_lines: list[str] = []
 
-    title_tag = soup.find("h1", class_=re.compile(r"post-title|article-title", re.I))
+    title_tag = soup.find("h1", class_=_TITLE_CLASS_RE)
     if title_tag is None:
         title_tag = soup.find("h1")
 
@@ -471,8 +477,8 @@ def post_to_md(
     md_lines.append("")
 
     body = (
-        soup.find("section", class_=re.compile(r"post-content|article-body|gh-content", re.I))
-        or soup.find("div", class_=re.compile(r"post-content|article-body|gh-content", re.I))
+        soup.find("section", class_=_BODY_CLASS_RE)
+        or soup.find("div", class_=_BODY_CLASS_RE)
         or soup.find("article")
         or soup.find("main")
     )
@@ -482,9 +488,8 @@ def post_to_md(
     for author_card in body.find_all("div", class_="author-card"):
         author_card.decompose()
 
-    for cls in ["post-share", "post-tags", "post-nav", "related-posts", "comments"]:
-        for unwanted in body.find_all(class_=re.compile(cls, re.I)):
-            unwanted.decompose()
+    for unwanted in body.find_all(class_=_UNWANTED_CLASS_RE):
+        unwanted.decompose()
 
     if title:
         for h1 in body.find_all("h1"):

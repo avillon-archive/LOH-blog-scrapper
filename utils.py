@@ -22,6 +22,9 @@ _file_lock = threading.Lock()
 # Default number of parallel workers for ThreadPoolExecutor.
 DEFAULT_MAX_WORKERS: int = 8
 
+# 모든 출력 데이터의 루트 디렉터리.
+ROOT_DIR: Path = Path(__file__).parent / "loh_blog"
+
 # ---------------------------------------------------------------------------
 # 블로그 도메인 Rate Limiter (토큰 버킷)
 # ---------------------------------------------------------------------------

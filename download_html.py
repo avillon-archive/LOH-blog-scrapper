@@ -7,6 +7,7 @@ from bs4 import BeautifulSoup
 
 from utils import (
     DEFAULT_MAX_WORKERS,
+    ROOT_DIR,
     FailedLog,
     ensure_utf8_console,
     extract_category,
@@ -17,8 +18,6 @@ from utils import (
     url_to_slug,
     write_text_unique,
 )
-
-ROOT_DIR = Path(__file__).parent / "loh_blog"
 HTML_DIR = ROOT_DIR / "html"
 DONE_FILE = ROOT_DIR / "done_html.txt"
 FAILED_FILE = ROOT_DIR / "failed_html.txt"
@@ -100,6 +99,12 @@ def run_html(
     HTML_DIR.mkdir(parents=True, exist_ok=True)
     done_slugs = load_done_file(DONE_FILE)
     done_urls: set[str] = set() if force_download else set(done_slugs.values())
+
+    if not retry_mode:
+        pending = sum(1 for url, _ in posts if url not in done_urls)
+        if pending == 0:
+            print(f"[HTML] {len(posts)}개 포스트 모두 다운로드 완료, 건너뜀")
+            return
 
     # process_post는 date를 사용하지 않으므로 lambda로 시그니처를 맞춘다.
     process_fn = lambda url, date: process_post(url, done_slugs, done_urls, force_overwrite=force_download)

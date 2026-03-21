@@ -2,15 +2,20 @@
 
 ## 경로 상수
 
-`ROOT_DIR = Path(__file__).parent / "loh_blog"` (스크립트 위치 기준, 실행 디렉토리 무관).
+`ROOT_DIR`은 `utils.py`에서 import (`from utils import ROOT_DIR`).
 
 ## 주요 상수
 
-- `BLOG_HOST = "blog-ko.lordofheroes.com"`
+- `BLOG_HOST`: `utils.py`에서 import
 - `GDRIVE_HOSTS = {"drive.google.com", "docs.google.com", "lh3.googleusercontent.com"}`
 - `COMMUNITY_CDN_HOST = "community-ko-cdn.lordofheroes.com"`
 - `DL_KEYWORDS = {"다운로드", "download", "다운", "받기", "저장", "고화질 이미지", "고화질", "이미지", "원본"}`
-- `DONE_POSTS_FILE`: 이미지 수집 완료 포스트 URL 목록.
+- `ARCHIVE_EXTS = {".zip", ".rar", ".7z", ".tar", ".gz", ".tgz"}` — 다운로드 가능한 압축 파일 확장자
+- `DOWNLOADABLE_EXTS = IMG_EXTS | ARCHIVE_EXTS` — 이미지 + 압축 파일 통합
+- `_SKIP_LINK_HOSTS` — 다운로드 대상이 아닌 외부 링크 도메인 (forms.gle, play.google.com 등)
+- `_NON_IMAGE_CONTEXT_KEYWORDS` — 비이미지 다운로드 링크 감지용 키워드 (bgm, ost 등)
+- `DONE_POSTS_FILE`: 이미지 수집 완료 포스트 URL+이미지 수 목록 (`URL\t이미지수`)
+- `FALLBACK_REPORT_FILE`: 폴백 성공 CSV 리포트 (`post_url, original_img_url, fallback_type, saved_path, source_url`)
 
 ## 락 구조
 
@@ -27,7 +32,8 @@
 ```python
 class ImageFailedLog:
     def record(self, post_url, img_url, reason) -> None
-    def remove(self, post_url, reason=None) -> None   # reason=None이면 post_url 전체 삭제
+    def remove(self, post_url, reason=None, img_url=None) -> None   # reason=None이면 post_url 전체 삭제, img_url 지정 시 해당 엔트리만 삭제
+    def remove_batch(self, post_url, img_urls: set[str]) -> None    # 여러 img_url을 한 번의 파일 I/O로 일괄 제거
     def load_post_urls(self) -> set[str]
 ```
 
@@ -57,10 +63,13 @@ class ImageFailedLog:
 | img src/data-src | `img` | `"/content/images/" in path and hostname == BLOG_HOST` |
 | img src/data-src | `img` | `hostname == COMMUNITY_CDN_HOST and ext in IMG_EXTS` |
 | a href | `gdrive` | `hostname in GDRIVE_HOSTS` |
-| a href | `linked_direct` | `ext in IMG_EXTS` |
+| a href | `linked_direct` | `ext in DOWNLOADABLE_EXTS` |
 | a href | `linked_keyword` | 앵커 텍스트에 `DL_KEYWORDS` 키워드 또는 해상도 패턴(`\d+[xX×]\d+`) |
 
-content_tag 탐색 순서: `.gh-content` → `.post-content` → `article` → `main`.
+content_tag 탐색: `_get_content_tag(soup)` 헬퍼 — `.gh-content` → `.post-content` → `article` → `main` 순.
+URL 정규화: `_clean_img_url(url)` — `_strip_ref_param()` + `clean_url()` 조합. Ghost CMS `ref` 쿼리 파라미터 제거.
+Google Drive 링크 중 `/spreadsheets/`, `/forms/` 경로와 `_SKIP_LINK_HOSTS` 도메인은 건너뜀.
+`_detect_non_image_urls(soup, post_url)` — 앵커 주변 heading에서 BGM/OST 등 비이미지 키워드 감지 시 해당 URL 제외.
 
 ---
 
@@ -72,8 +81,8 @@ content_tag 탐색 순서: `.gh-content` → `.post-content` → `article` → `
 |------|-------|-------|-------|
 | `img` / `og_image` | 직접 + CT 검증 | Wayback `im_` | Wayback 포스트 스냅샷에서 img/og:image 탐색 |
 | `gdrive` | 직접 (min 500B) | Wayback `im_` | Wayback 포스트 스냅샷에서 img 탐색 |
-| `linked_keyword` | 직접 + CT 검증 | Wayback `im_` | Wayback 포스트 스냅샷에서 `<a>` 탐색 |
-| `linked_direct` | 직접 + CT 또는 확장자 | community CDN에 한해 Wayback `im_` | - |
+| `linked_keyword` | 직접 + CT 검증 (아카이브 허용) | Wayback `im_` (아카이브 허용) | Wayback 포스트 스냅샷에서 `<a>` 탐색 (아카이브 허용) |
+| `linked_direct` | 직접 + CT 또는 확장자 (아카이브 허용) | community CDN에 한해 Wayback `im_` (아카이브 허용) | - |
 
 ### 확장 폴백 (retry 모드 전용)
 
@@ -162,7 +171,7 @@ class KakaoPFPost(NamedTuple):
 
 ## Wayback 캐시
 
-- `_wayback_oldest(url)`: CDX API `limit=1`. `_wayback_cache`에 캐시. 동일 URL 동시 요청 시 `_wayback_events`로 선착 스레드만 fetch, 나머지는 대기 후 캐시 사용.
+- `_wayback_oldest(url)`: CDX API `limit=5`, `fl=timestamp,original,statuscode`. 2xx/3xx 응답만 사용. `_strip_ref_param()` 적용 후 조회. `_wayback_cache`에 캐시. 동일 URL 동시 요청 시 `_wayback_events`로 선착 스레드만 fetch, 나머지는 대기 후 캐시 사용.
 - `_add_im(url)`: `/web/{ts}/` → `/web/{ts}im_/`.
 - `_fetch_wayback_post_soup`: 파싱 전 `resp.encoding = resp.apparent_encoding or "utf-8"`로 인코딩 보정 (Wayback 래퍼 페이지의 부정확한 헤더 대응).
 - `_fetch_wayback_gdrive_from_post`: img 탐색 시 `src` 및 `data-src` 모두 확인. lazy-load 이미지가 Wayback 스냅샷에 `data-src`로만 남아있는 경우를 처리한다.
@@ -188,7 +197,7 @@ def run_images(
 ) -> None:
 ```
 
-- `force_download=True`: `done_post_urls` 빈 set으로 초기화.
+- `force_download=True`: `done_post_urls` 빈 dict으로 초기화, `seen_urls` 빈 set으로 초기화. Phase 2 재배치 건너뜀.
 - `html_index`: `fetch_post_html(url, html_index)`를 통해 로컬 HTML 우선 조회.
 - `retry_mode=True`: 다국어 Wayback 폴백 + Kakao PF 폴백 자동 활성화.
 
@@ -198,7 +207,8 @@ def run_images(
 
 - `save_image(content, filename, folder) -> str`: 충돌 시 `_2`, `_3` 번호 부여. 항상 유효한 파일명 반환.
 - `failed_images.txt` 형식: `post_url\timg_url\treason`. fetch_post_failed는 img_url 빈 문자열.
-- retry 모드: `fetch_post_failed`는 포스트 fetch 성공 시 제거. `download_failed`는 `fail==0 and ok>0` 시에만 제거. retry 대상 0개이면 `run_pipeline`과 동일하게 메시지 출력 후 즉시 반환.
+- retry 모드: `fetch_post_failed`는 포스트 fetch 성공 시 제거. 개별 이미지 성공 시 `remove_from_failed_batch()`로 해당 img_url 엔트리만 일괄 제거. retry 대상 0개이면 메시지 출력 후 즉시 반환.
+- `done_post_urls`: `dict[str, int]` (URL → 이미지 수). retry 모드에서는 이미지 수가 변경된 포스트만 재처리.
 - `--backfill-map`: 기존 다운로드 이력으로 `image_map.tsv` 재구성. thumbnails 폴더는 `relative_to(IMAGES_DIR).parts`에 `"thumbnails"` 포함 여부로 제외.
 - `image_map.tsv`에 썸네일(`og_image`) 경로도 기록한다.
 - 단독 실행 시 `--posts` 기본값은 `all_links.txt`.

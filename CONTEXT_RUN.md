@@ -6,12 +6,12 @@
 - `PAGES_FILE = ROOT_DIR / "all_pages.txt"`
 - `LINKS_FILE = ROOT_DIR / "all_links.txt"`
 - `CUSTOM_POSTS_FILE = ROOT_DIR / "custom_posts.txt"`
-- `ROOT_DIR = Path(__file__).parent / "loh_blog"`
+- `ROOT_DIR`: `utils.py`에서 import
 - 실행 순서: `PIPELINE_ORDER = ("html", "images", "md")` 고정.
 
 ## HTML 항상 실행
 
-`selected.add("html")` — `--images`나 `--md`만 지정해도 HTML 단계는 항상 포함된다. HTML을 먼저 실행하여 `build_html_index()`로 로컬 캐시를 구축하고, 이후 images/md 단계에서 `html_index` 파라미터를 통해 네트워크 fetch 없이 HTML을 재활용한다.
+`selected = user_selected | {"html"}` — `--images`나 `--md`만 지정해도 HTML 단계는 항상 포함된다. 단, 사용자가 명시적으로 `--html`을 선택하지 않은 경우 HTML 단계에 `retry_mode`와 `force_download`를 전달하지 않는다 (보조 단계로만 실행).
 
 ## CLI 옵션
 
@@ -21,7 +21,8 @@
 | `--retry` | 실패 목록 재처리. `--sample`과 조합 가능. |
 | `--posts` | `all_posts.txt`를 소스로 사용. 해당 사이트맵 개별 갱신 체크. |
 | `--pages` | `all_pages.txt`를 소스로 사용. 해당 사이트맵 개별 갱신 체크. |
-| `--custom` | `custom_posts.txt`를 소스로 사용. 사이트맵 갱신 건너뜀. `force_download=True` (강제 재다운로드). |
+| `--custom` | `custom_posts.txt`를 소스로 사용. 사이트맵 갱신 건너뜀. |
+| `--force` | 기존 기록 무시하고 전체 재다운로드 (`done` 기록 무시). |
 | `--sample N` | 랜덤 N개 테스트. **`all_links.txt` 행 수의 10%를 상한**으로 자동 클램핑. `--posts` / `--pages` / `--custom`과 동시 사용 불가. |
 | `--seed N` | `--sample` 샘플링 고정 시드. |
 | *(미지정)* | `all_links.txt` 사용 (기본값). 사이트맵 freshness 체크 후 필요 시 갱신. |

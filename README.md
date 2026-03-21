@@ -1,6 +1,6 @@
 # LOH Blog Scrapper
 
-Claude Sonnet 4.6과 GPT-5.3-Codex을 이용하여 작성한 사이트맵 기반 블로그 포스트 스크래퍼.
+Claude Sonnet/Opus 4.6과 GPT-5.3-Codex을 이용하여 작성한 사이트맵 기반 블로그 포스트 스크래퍼.
 
 ## 이미지
 
