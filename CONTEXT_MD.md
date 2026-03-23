@@ -11,16 +11,16 @@
 
 ## HTML → Markdown 변환
 
+`markitdown` 패키지(`MarkItDown`)를 사용하며, 스레드별 인스턴스를 `_thread_local`로 캐싱한다 (`_get_converter()`).
+
+- **날짜 추출**: `<meta property="article:published_time">` 에서 `YYYY-MM-DD`를 우선 추출하고, 없으면 `post_date` 인자를 fallback으로 사용한다. 따라서 `custom_posts.txt`처럼 날짜 컬럼이 없어도 HTML에서 자동으로 날짜를 파싱한다.
 - **제목 탐색**: `h1.post-title` → `h1` → `og:title` 순. (`_TITLE_CLASS_RE` 사전 컴파일 정규식)
 - **본문 탐색**: `section.post-content` → `div.post-content` → `article` → `main` 순. (`_BODY_CLASS_RE` 사전 컴파일 정규식)
 - **제거 태그**: `author-card`, `post-share`, `post-tags`, `post-nav`, `related-posts`, `comments`. (`_UNWANTED_CLASS_RE` 단일 정규식으로 일괄 탐색)
 - **제목 중복 방지**: body 내 h1 sweep 후 `title_tag.parent is not None` 체크로 header 범위 외 제목 별도 제거.
-- **`_wrap_marker(inner, marker)`**: `**`, `*`, `~~` 마커를 씌울 때 앞뒤 공백을 마커 바깥으로 이동. whitespace-only인 경우 마커 없이 원문 공백을 그대로 반환 (중첩 strong 평탄화 시 공백 소멸 방지).
-- **`_strip_marker(text, marker)`**: text가 해당 마커로 외부 래핑된 경우에만 마커를 제거한다 (중첩 마커 평탄화용). 마커 문자 경계를 직접 검사하므로 `**bold**` 내부에서 `*`를 오탐하지 않는다. `strong/b`, `em/i`, `del/s/strike` 변환 시 `_children_inline` 결과에 적용 후 `_wrap_marker`를 씌운다. 원본 HTML에 잘못 중첩된 `<strong><strong>...</strong></strong>` 구조를 단일 `**...**`로 평탄화한다.
-- **`img_to_md(img_tag, post_url, image_map, img_prefix)`**: `image_map` 등록 시 `img_prefix + 상대경로` 형태로 참조. `img_prefix`는 `process_post`에서 `target_dir.relative_to(ROOT_DIR).parts`의 depth로 자동 계산 (`md/` → `"../"`, `md/카테고리/` → `"../../"`). 미등록 시 절대 URL 폴백.
-- `INLINE_MAX_DEPTH = 60`: 비정상 중첩 HTML 안전장치.
-- `collapse_blank_lines`: 연속 빈 줄 최대 1개.
-- `_convert_table`: `<thead>` 없이 `<tbody>`만 있을 때 첫 tr을 헤더로 사용하며 body_rows 중복 방지.
+- **`_flatten_nested_inline(body)`**: 변환 전 전처리. `strong/b`, `em/i`, `del/s/strike` 태그가 동일 태그로 중첩(`<strong><strong>...</strong></strong>`)되어 있으면 내부 태그를 `unwrap()`하여 평탄화한다. 원본 HTML의 중첩 오류가 markitdown에서 `**********text**********` 처럼 마커 누적으로 출력되는 것을 방지한다.
+- **`_rewrite_images(body, ...)`**: `image_map` 등록 시 `img_prefix + 상대경로` 형태로 참조. `img_prefix`는 `process_post`에서 `target_dir.relative_to(ROOT_DIR).parts`의 depth로 자동 계산 (`md/` → `"../"`, `md/카테고리/` → `"../../"`). 미등록 시 절대 URL 폴백.
+- **`_resolve_links(body, post_url)`**: 상대 `<a href>` 를 절대 URL로 변환.
 - slug 충돌 시 `write_text_unique`가 `slug_2.md`, `slug_3.md` ... 자동 처리.
 - `OSError` 발생 시 `write_failed:...`로 실패 기록 후 `False` 반환.
 

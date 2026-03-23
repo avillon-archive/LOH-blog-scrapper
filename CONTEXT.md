@@ -18,7 +18,7 @@
 |------|------|
 | `utils.py` | 공통 유틸 (세션, 재시도, 파일 I/O, rate limiter, `ROOT_DIR`, `BLOG_HOST`, `url_to_slug`, `VALID_CATEGORIES`, `extract_category`, `FailedLog`, `write_text_unique`, `run_pipeline`, `LineBuffer`, `build_html_index`, `fetch_post_html`) |
 | `download_images.py` | 이미지 다운로드 (`ImageFailedLog` 클래스로 실패 이력 관리, 다국어·Kakao PF 폴백 포함) |
-| `download_md.py` | HTML → MD 변환·저장 |
+| `download_md.py` | HTML → MD 변환·저장 (`markitdown` 패키지 사용) |
 | `download_html.py` | 원문 HTML 저장 |
 | `run_all.py` | 마스터 실행 스크립트 (실행 전 사이트맵 자동 갱신 포함) |
 | `build_posts_list.py` | 사이트맵 파싱 → `loh_blog/all_posts.txt` / `all_pages.txt` / `all_links.txt` 생성 |
@@ -27,7 +27,7 @@
 | `loh_blog/all_pages.txt` | sitemap-pages.xml URL+날짜 (`URL\tYYYY-MM-DD`, 날짜 **내림차순**) |
 | `loh_blog/all_links.txt` | `all_posts.txt` + `all_pages.txt` 병합·중복 제거 목록 (기본 소스) |
 | `loh_blog/custom_posts.txt` | 수동 작성 URL 목록. `all_posts.txt`와 동일한 포맷. `--custom` 옵션 사용 시 소스로 읽힘 |
-| `requirements.txt` | `requests`, `beautifulsoup4`, `lxml` |
+| `requirements.txt` | `requests`, `beautifulsoup4`, `lxml`, `markitdown` |
 
 > **모듈 독립성**: `download_html.py`와 `download_md.py`는 서로 의존하지 않는다. `url_to_slug`는 `utils.py`에 정의되어 있으며 두 모듈이 공통 import한다.
 
@@ -124,6 +124,7 @@ MD 파일 내 이미지 참조는 MD 파일 위치 기준 상대경로. `img_pre
 ---
 ```
 카테고리가 없는 포스트는 `**카테고리:**` 행 없이 `**작성일:**` → `**원문:**` 순서.
+작성일은 HTML `<meta property="article:published_time">`에서 우선 추출하고, 없으면 포스트 목록 파일의 날짜를 fallback으로 사용한다.
 
 ---
 

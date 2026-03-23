@@ -1,5 +1,6 @@
 loh_blog/
 __pycache__/
+.venv
 .claude/*.json
 .vscode/
 *.pyc
