@@ -109,8 +109,6 @@ _save_lock = threading.Lock()
 _done_buf = LineBuffer(DONE_FILE)
 # image_map.tsv 갱신 (이미지당 1회)
 _map_buf = LineBuffer(IMAGE_MAP_FILE)
-# 썸네일 해시 캐시 (레거시, 마이그레이션 후 미사용)
-_thumb_buf = LineBuffer(THUMB_HASH_FILE)
 # 통합 이미지 해시 캐시 (이미지당 1회)
 _img_hash_buf = LineBuffer(IMG_HASH_FILE)
 # 포스트 완료 이력 (포스트당 1회)
@@ -243,6 +241,7 @@ class PostProcessResult:
     ok_original: int = 0
     ok_multilang: int = 0
     ok_kakao: int = 0
+    ok_dedup: int = 0
     succeeded_urls: list[str] = field(default_factory=list)
 
 
@@ -1821,7 +1820,6 @@ def download_one_image(
     img_hashes: dict[str, str],
     image_map: dict[str, str],
     thumb_hashes: set[str],
-    hash_dup_count: dict[str, int],
     post_soup_cache: dict[str, tuple[BeautifulSoup, str] | None] | None = None,
     *,
     post_date: str = "",
@@ -1948,7 +1946,6 @@ def download_one_image(
         if existing_rel is not None:
             # 해시 중복: 같은 콘텐츠가 이미 저장됨 → 저장 생략, 경로만 매핑
             seen_urls.add(seen_key)
-            hash_dup_count[content_hash] = hash_dup_count.get(content_hash, 0) + 1
             img_key = _clean_img_url(img_url)
             if img_key not in image_map:
                 image_map[img_key] = existing_rel
@@ -2028,7 +2025,6 @@ def process_post(
     img_hashes: dict[str, str],
     image_map: dict[str, str],
     thumb_hashes: set[str],
-    hash_dup_count: dict[str, int],
     done_post_urls: dict[str, int],
     html_index: "dict[str, Path] | None" = None,
     *,
@@ -2076,7 +2072,7 @@ def process_post(
     date_folder = date_to_folder(post_date)
     folder = IMAGES_DIR / (category or "etc") / date_folder
 
-    ok = fail = ok_saved = ok_original = ok_multilang = ok_kakao = 0
+    ok = fail = ok_saved = ok_original = ok_multilang = ok_kakao = ok_dedup = 0
     succeeded_urls: list[str] = []
     post_soup_cache: dict[str, tuple[BeautifulSoup, str] | None] = {}
     for idx, (img_url, utype) in enumerate(images, start=1):
@@ -2092,7 +2088,6 @@ def process_post(
             img_hashes,
             image_map,
             thumb_hashes,
-            hash_dup_count,
             post_soup_cache=post_soup_cache,
             post_date=post_date,
             blog_title=blog_title,
@@ -2103,8 +2098,10 @@ def process_post(
         if how:
             ok += 1
             succeeded_urls.append(img_url)
-            if how in ("already", "dup"):
-                pass  # 기존 파일 또는 해시 중복 — 새 저장 아님
+            if how == "dup":
+                ok_dedup += 1
+            elif how == "already":
+                pass  # 이미 다운로드된 URL
             else:
                 ok_saved += 1
                 if how == "original":
@@ -2124,116 +2121,8 @@ def process_post(
     return PostProcessResult(ok=ok, fail=fail, post_fetch_ok=True,
                              ok_saved=ok_saved, ok_original=ok_original,
                              ok_multilang=ok_multilang, ok_kakao=ok_kakao,
+                             ok_dedup=ok_dedup,
                              succeeded_urls=succeeded_urls)
-
-
-# ---------------------------------------------------------------------------
-# Phase 2: 공유 이미지 재배치
-# ---------------------------------------------------------------------------
-
-
-# images/{category}/{YYYY}/{MM}/ 패턴에서 카테고리를 추출하는 정규식
-_CAT_DATE_RE = re.compile(
-    r"^images/(?:([^/]+)/)?(\d{4})/(\d{2})/.+$"
-)
-
-
-def _relocate_shared_images(
-    img_hashes: dict[str, str],
-    thumb_hashes: set[str],
-    hash_dup_count: dict[str, int],
-    image_map: dict[str, str],
-) -> int:
-    """해시 중복이 발생한(재사용) 이미지를 카테고리 루트로 이동한다.
-
-    - 일반 이미지 → images/{category}/ (카테고리 없으면 images/common/)
-    - 썸네일     → images/{category}/thumbnails/ (카테고리 없으면 images/common/thumbnails/)
-
-    Returns:
-        이동된 파일 수.
-    """
-    import shutil
-
-    moved = 0
-    # 경로 변경을 기록해 image_map 일괄 갱신에 사용
-    path_remap: dict[str, str] = {}  # old_rel → new_rel
-
-    for content_hash, dup_count in hash_dup_count.items():
-        if dup_count < 1:
-            continue
-        old_rel = img_hashes.get(content_hash)
-        if not old_rel:
-            continue
-
-        m = _CAT_DATE_RE.match(old_rel)
-        if not m:
-            # 이미 카테고리 루트에 있거나 패턴 불일치 → 스킵
-            continue
-
-        category = m.group(1) or "common"  # 카테고리 없으면 "common"
-        filename = Path(old_rel).name
-        is_thumb = content_hash in thumb_hashes
-
-        if is_thumb:
-            new_dir = IMAGES_DIR / category / "thumbnails"
-        else:
-            new_dir = IMAGES_DIR / category
-
-        new_rel = (new_dir / filename).relative_to(ROOT_DIR).as_posix()
-        if new_rel == old_rel:
-            continue
-
-        old_path = ROOT_DIR / old_rel
-        if not old_path.exists():
-            continue
-
-        new_dir.mkdir(parents=True, exist_ok=True)
-        new_path = new_dir / filename
-
-        # 파일명 충돌 방지
-        if new_path.exists() and new_path != old_path:
-            stem = new_path.stem
-            suffix = new_path.suffix
-            idx = 2
-            while new_path.exists():
-                new_path = new_dir / f"{stem}_{idx}{suffix}"
-                idx += 1
-            new_rel = new_path.relative_to(ROOT_DIR).as_posix()
-
-        shutil.move(str(old_path), str(new_path))
-        path_remap[old_rel] = new_rel
-        img_hashes[content_hash] = new_rel
-        moved += 1
-
-        # 빈 디렉토리 정리
-        parent = old_path.parent
-        while parent != IMAGES_DIR:
-            try:
-                parent.rmdir()
-                parent = parent.parent
-            except OSError:
-                break
-
-    if not path_remap:
-        return 0
-
-    # image_map 경로 일괄 갱신
-    for url_key, rel in list(image_map.items()):
-        if rel in path_remap:
-            image_map[url_key] = path_remap[rel]
-
-    # image_map.tsv 전체 재작성
-    lines = [f"{k}\t{v}" for k, v in image_map.items()]
-    IMAGE_MAP_FILE.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
-
-    # image_hashes.tsv 전체 재작성
-    lines = [
-        f"{h}\t{rel}\t{'T' if h in thumb_hashes else ''}"
-        for h, rel in img_hashes.items()
-    ]
-    IMG_HASH_FILE.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
-
-    return moved
 
 
 def _generate_fallback_csv() -> int:
@@ -2307,7 +2196,6 @@ def run_images(
 
     seen_urls = set() if force_download else load_seen(DONE_FILE)
     img_hashes, thumb_hashes = _load_or_build_img_hashes()
-    hash_dup_count: dict[str, int] = {}
     image_map = load_image_map(IMAGE_MAP_FILE)
     done_post_urls: dict[str, int] = {} if (force_download or retry_mode) else _load_done_post_urls(DONE_POSTS_FILE)
 
@@ -2347,6 +2235,7 @@ def run_images(
     total_original = 0
     total_multilang = 0
     total_kakao = 0
+    total_dedup = 0
     completed = 0
     counter_lock = threading.Lock()
 
@@ -2358,7 +2247,7 @@ def run_images(
         future_to_post = {
             executor.submit(
                 process_post, url, date, seen_urls, img_hashes, image_map,
-                thumb_hashes, hash_dup_count, done_post_urls,
+                thumb_hashes, done_post_urls,
                 html_index=html_index,
                 retry_mode=retry_mode,
                 multilang_date_index=multilang_date_index,
@@ -2381,6 +2270,7 @@ def run_images(
                 total_original += result.ok_original
                 total_multilang += result.ok_multilang
                 total_kakao += result.ok_kakao
+                total_dedup += result.ok_dedup
                 completed += 1
                 cur_completed = completed
 
@@ -2391,13 +2281,15 @@ def run_images(
 
             if cur_completed % report_interval == 0 or cur_completed == total:
                 eta = eta_str(cur_completed, total, start)
-                existing = total_ok - total_saved
+                existing = total_ok - total_saved - total_dedup
                 if retry_mode:
                     print(f"  {eta} 저장={total_saved} "
                           f"(원본={total_original} multilang={total_multilang} "
-                          f"kakao={total_kakao}) 기존={existing} 실패={total_fail}")
+                          f"kakao={total_kakao}) 중복={total_dedup} "
+                          f"기존={existing} 실패={total_fail}")
                 else:
-                    print(f"  {eta} 저장={total_saved} 기존={existing} 실패={total_fail}")
+                    print(f"  {eta} 저장={total_saved} 중복={total_dedup} "
+                          f"기존={existing} 실패={total_fail}")
 
     # 모든 worker 완료 후 버퍼 잔량을 파일에 flush
     _done_buf.flush_all()
@@ -2407,25 +2299,21 @@ def run_images(
     _multilang_log_buf.flush_all()
     _kakao_pf_log_buf.flush_all()
 
-    # Phase 2: 재사용 이미지를 카테고리 루트로 이동 (force 모드에서는 건너뜀)
-    if hash_dup_count and not force_download:
-        moved = _relocate_shared_images(img_hashes, thumb_hashes, hash_dup_count, image_map)
-        if moved:
-            print(f"[이미지] 공유 이미지 {moved}개 재배치 완료")
-
     # 폴백 CSV 리포트 생성 (retry 시)
     if retry_mode:
         csv_count = _generate_fallback_csv()
         if csv_count:
             print(f"[이미지] 폴백 리포트: {FALLBACK_REPORT_FILE} ({csv_count}건)")
 
-    existing = total_ok - total_saved
+    existing = total_ok - total_saved - total_dedup
     if retry_mode:
         print(f"\n[이미지 완료] 저장={total_saved} "
               f"(원본={total_original} multilang={total_multilang} "
-              f"kakao={total_kakao}) 기존={existing} 실패={total_fail}")
+              f"kakao={total_kakao}) 중복={total_dedup} "
+              f"기존={existing} 실패={total_fail}")
     else:
-        print(f"\n[이미지 완료] 저장={total_saved} 기존={existing} 실패={total_fail}")
+        print(f"\n[이미지 완료] 저장={total_saved} 중복={total_dedup} "
+              f"기존={existing} 실패={total_fail}")
 
 
 if __name__ == "__main__":

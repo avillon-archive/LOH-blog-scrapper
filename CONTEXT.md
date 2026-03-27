@@ -71,12 +71,8 @@ python3 build_posts_list.py             # all_posts.txt / all_pages.txt / all_li
   all_links.txt              ← all_posts.txt + all_pages.txt 병합·중복 제거 (기본 소스)
   custom_posts.txt           ← 수동 작성 URL 목록 (--custom 옵션 소스)
   kakao_pf_index.json        ← Kakao PF 게시글 캐시 (API 응답 JSON)
-  images/카테고리명/YYYY/MM/  ← 본문 이미지 (카테고리·날짜별 폴더, 고유 이미지)
-  images/카테고리명/          ← 재사용 일반 이미지 (해시 중복 2+회 출현)
-  images/카테고리명/thumbnails/ ← 재사용 썸네일 (해시 중복 2+회 출현)
-  images/etc/YYYY/MM/        ← 카테고리 없는 본문 이미지 (고유)
-  images/common/             ← 카테고리 없는 재사용 일반 이미지
-  images/common/thumbnails/  ← 카테고리 없는 재사용 썸네일
+  images/카테고리명/YYYY/MM/  ← 본문 이미지 (카테고리·날짜별 폴더)
+  images/etc/YYYY/MM/        ← 카테고리 없는 본문 이미지
   images/multilang_fallback.tsv ← 다국어 Wayback 폴백 성공 로그
   images/kakao_pf_log.tsv    ← Kakao PF 폴백 성공 로그
   md/                        ← 카테고리 없는 MD 파일

@@ -19,7 +19,7 @@
 
 ## 락 구조
 
-- `_state_lock`: `seen_urls` / `img_hashes` / `image_map` / `hash_dup_count` / `thumb_hashes` in-memory 갱신 전용.
+- `_state_lock`: `seen_urls` / `img_hashes` / `image_map` / `thumb_hashes` in-memory 갱신 전용.
 - `_save_lock`: `save_image()` 파일명 충돌 해소 전용 (디스크 I/O 직렬화).
 - `_dl_lock`: `ImageFailedLog` 내부 캐시 전용.
 
@@ -158,14 +158,9 @@ class KakaoPFPost(NamedTuple):
 
 ---
 
-## 2단계 처리 흐름
+## 처리 흐름
 
-**Phase 1 (다운로드)**: `process_post()`에서 `extract_category(soup)` 호출 → `images/{category}/{YYYY}/{MM}/`에 저장 (카테고리 없으면 `images/etc/{YYYY}/{MM}/`). 일반 이미지·썸네일 모두 SHA-256 해시 기반 중복 체크 (`img_hashes: dict[str, str]`). 해시 중복 시 저장 생략, `image_map`에 기존 경로 매핑. 중복 횟수는 `hash_dup_count`로 추적.
-
-**Phase 2 (후처리)**: `_relocate_shared_images()` — `hash_dup_count`에서 재사용 이미지 식별 후 카테고리 루트로 이동:
-- 일반 이미지 → `images/{category}/` (카테고리 없으면 `images/common/`)
-- 썸네일 → `images/{category}/thumbnails/` (카테고리 없으면 `images/common/thumbnails/`)
-- `image_map.tsv`, `image_hashes.tsv` 경로 자동 갱신. 빈 디렉토리 정리.
+`process_post()`에서 `extract_category(soup)` 호출 → `images/{category}/{YYYY}/{MM}/`에 저장 (카테고리 없으면 `images/etc/{YYYY}/{MM}/`). 일반 이미지·썸네일 모두 SHA-256 해시 기반 중복 체크 (`img_hashes: dict[str, str]`). 해시 중복 시 저장 생략, `image_map`에 기존 경로 매핑. 이미지는 최초 저장 위치에서 이동하지 않는다.
 
 ---
 
@@ -197,7 +192,7 @@ def run_images(
 ) -> None:
 ```
 
-- `force_download=True`: `done_post_urls` 빈 dict으로 초기화, `seen_urls` 빈 set으로 초기화. Phase 2 재배치 건너뜀.
+- `force_download=True`: `done_post_urls` 빈 dict으로 초기화, `seen_urls` 빈 set으로 초기화.
 - `html_index`: `fetch_post_html(url, html_index)`를 통해 로컬 HTML 우선 조회.
 - `retry_mode=True`: 다국어 Wayback 폴백 + Kakao PF 폴백 자동 활성화.
 
