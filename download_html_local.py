@@ -107,6 +107,57 @@ class CssDownloader:
 
 
 # ---------------------------------------------------------------------------
+# 사이트 크롬 이미지 다운로드 (favicon, 로고, 프로필 등)
+# ---------------------------------------------------------------------------
+
+_BLOG_IMAGE_PREFIX = "https://blog-ko.lordofheroes.com/content/images/"
+
+
+class SiteImageDownloader:
+    """블로그 사이트 크롬 이미지를 assets/ 에 다운로드. 스레드 안전."""
+
+    def __init__(self, assets_dir: Path) -> None:
+        self._assets_dir = assets_dir
+        self._lock = threading.Lock()
+        self._url_locks: dict[str, threading.Lock] = {}
+
+    def download(self, img_url: str) -> str | None:
+        """이미지를 다운로드하고 로컬 파일명 반환. 블로그 이미지가 아니면 None."""
+        if not img_url.startswith(_BLOG_IMAGE_PREFIX):
+            return None
+
+        filename = self._filename(img_url)
+        local_path = self._assets_dir / filename
+        if local_path.exists():
+            return filename
+
+        with self._lock:
+            if img_url not in self._url_locks:
+                self._url_locks[img_url] = threading.Lock()
+            url_lock = self._url_locks[img_url]
+
+        with url_lock:
+            if local_path.exists():
+                return filename
+            resp = fetch_with_retry(img_url)
+            if resp is None:
+                return None
+            local_path.write_bytes(resp.content)
+            return filename
+
+    @staticmethod
+    def _filename(img_url: str) -> str:
+        """URL에서 파일명 추출 + URL 해시 접미사로 충돌 방지."""
+        path = urllib.parse.urlparse(img_url).path
+        name = path.rsplit("/", 1)[-1] or "image.png"
+        stem, _, ext = name.rpartition(".")
+        if not ext:
+            stem, ext = name, "png"
+        url_hash = hashlib.md5(img_url.encode()).hexdigest()[:8]
+        return f"{stem}_{url_hash}.{ext}"
+
+
+# ---------------------------------------------------------------------------
 # 이미지 경로 리라이트
 # ---------------------------------------------------------------------------
 
@@ -132,6 +183,8 @@ def _rewrite_img_src(
     post_url: str,
     image_map: dict[str, str],
     prefix: str,
+    site_img: SiteImageDownloader | None = None,
+    assets_prefix: str = "",
 ) -> tuple[str, bool]:
     """이미지 src를 로컬 경로로 변환 시도.
 
@@ -145,6 +198,11 @@ def _rewrite_img_src(
     relative_path = image_map.get(key)
     if relative_path:
         return f"{prefix}{relative_path}", True
+    # 블로그 사이트 크롬 이미지 → assets/ 다운로드
+    if site_img:
+        filename = site_img.download(abs_src)
+        if filename:
+            return f"{assets_prefix}{filename}", True
     return abs_src, False
 
 
@@ -177,6 +235,7 @@ class HtmlLocalizer:
         slug_map: dict[str, str],
         category: str | None,
         css_downloader: CssDownloader,
+        site_image_downloader: SiteImageDownloader | None = None,
     ) -> None:
         self._soup = soup
         self._post_url = post_url
@@ -184,6 +243,7 @@ class HtmlLocalizer:
         self._slug_map = slug_map
         self._category = category
         self._css = css_downloader
+        self._site_img = site_image_downloader
         self._prefix = _img_prefix(category)
         self._assets_prefix = _assets_prefix(category)
 
@@ -211,13 +271,18 @@ class HtmlLocalizer:
 
     # -- 이미지 리라이트 --
 
+    def _rewrite_img(self, src: str) -> tuple[str, bool]:
+        """_rewrite_img_src 호출을 간소화하는 내부 헬퍼."""
+        return _rewrite_img_src(
+            src, self._post_url, self._image_map, self._prefix,
+            self._site_img, self._assets_prefix,
+        )
+
     def _rewrite_images(self) -> None:
         """<img> 태그의 src/srcset/data-src 를 로컬 경로로 리라이트."""
         for img in self._soup.find_all("img"):
             src = img.get("src") or img.get("data-src") or ""
-            new_src, mapped = _rewrite_img_src(
-                src, self._post_url, self._image_map, self._prefix
-            )
+            new_src, mapped = self._rewrite_img(src)
             img["src"] = new_src
             if img.get("data-src"):
                 del img["data-src"]
@@ -230,9 +295,7 @@ class HtmlLocalizer:
             prop = meta.get("property", "") or meta.get("name", "")
             if "image" not in prop.lower():
                 continue
-            new_src, mapped = _rewrite_img_src(
-                meta["content"], self._post_url, self._image_map, self._prefix
-            )
+            new_src, mapped = self._rewrite_img(meta["content"])
             if mapped:
                 meta["content"] = new_src
 
@@ -241,9 +304,7 @@ class HtmlLocalizer:
             "link", rel=lambda v: v and "icon" in " ".join(v).lower()
         ):
             href = link.get("href", "")
-            new_src, mapped = _rewrite_img_src(
-                href, self._post_url, self._image_map, self._prefix
-            )
+            new_src, mapped = self._rewrite_img(href)
             if mapped:
                 link["href"] = new_src
 
@@ -255,9 +316,7 @@ class HtmlLocalizer:
             changed = False
             for match in re.finditer(r'"url"\s*:\s*"([^"]+)"', text):
                 url_val = match.group(1)
-                new_src, mapped = _rewrite_img_src(
-                    url_val, self._post_url, self._image_map, self._prefix
-                )
+                new_src, mapped = self._rewrite_img(url_val)
                 if mapped:
                     text = text.replace(url_val, new_src)
                     changed = True
@@ -279,6 +338,8 @@ class HtmlLocalizer:
         post_url = self._post_url
         image_map = self._image_map
         prefix = self._prefix
+        site_img = self._site_img
+        assets_prefix = self._assets_prefix
 
         def _replace(m: re.Match) -> str:
             url_val = m.group(2)
@@ -289,6 +350,10 @@ class HtmlLocalizer:
             relative_path = image_map.get(key)
             if relative_path:
                 return m.group(1) + prefix + relative_path + m.group(3)
+            if site_img:
+                filename = site_img.download(abs_url)
+                if filename:
+                    return m.group(1) + assets_prefix + filename + m.group(3)
             return m.group(1) + abs_url + m.group(3)
 
         return BG_IMAGE_RE.sub(_replace, css_text)
@@ -385,72 +450,200 @@ def _build_slug_map(
 
 
 # ---------------------------------------------------------------------------
-# 목록 페이지 fetch & 합치기
+# 목록 페이지: 템플릿 fetch + 로컬 메타데이터 기반 카드 생성
 # ---------------------------------------------------------------------------
 
-_MAX_LISTING_PAGES = 100  # rel="next" 무한루프 방지
+_LISTING_CACHE_DIR = ROOT_DIR / "listing_cache"
 
 
-def _fetch_all_articles(
-    url: str,
-) -> tuple[BeautifulSoup, list] | None:
-    """목록 페이지의 모든 pagination을 fetch하여 전체 article 목록을 반환.
+def _fetch_listing_template(url: str) -> BeautifulSoup | None:
+    """목록 페이지 1만 fetch하여 레이아웃 템플릿으로 반환. 캐시 지원."""
+    _LISTING_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    cache_key = hashlib.md5(url.encode()).hexdigest()[:12]
+    cache_path = _LISTING_CACHE_DIR / f"{cache_key}.html"
 
-    Returns:
-        (page1_soup, all_articles) 또는 fetch 실패 시 None.
-    """
-    resp = fetch_with_retry(url)
-    if resp is None:
-        return None
-    page1_soup = BeautifulSoup(resp.text, "lxml")
-    post_feed = page1_soup.find("div", class_="post-feed")
-    if post_feed is None:
-        return None
-
-    all_articles = list(post_feed.find_all("article", class_="post-card"))
-
-    # 나머지 페이지 순회
-    current_soup = page1_soup
-    for _ in range(_MAX_LISTING_PAGES):
-        next_link = current_soup.find("link", rel="next")
-        if next_link is None:
-            break
-        next_url = next_link.get("href", "")
-        if not next_url:
-            break
-        resp = fetch_with_retry(next_url)
+    if cache_path.is_file():
+        html = cache_path.read_text(encoding="utf-8")
+    else:
+        resp = fetch_with_retry(url)
         if resp is None:
-            break
-        current_soup = BeautifulSoup(resp.text, "lxml")
-        feed = current_soup.find("div", class_="post-feed")
-        if feed is None:
-            break
-        all_articles.extend(feed.find_all("article", class_="post-card"))
+            return None
+        html = resp.text
+        cache_path.write_text(html, encoding="utf-8")
 
-    return page1_soup, all_articles
+    soup = BeautifulSoup(html, "lxml")
+    if soup.find("div", class_="post-feed") is None:
+        return None
+    return soup
+
+
+def _extract_post_meta(html_path: Path) -> dict | None:
+    """로컬 HTML에서 listing 카드용 메타데이터 추출."""
+    try:
+        html = html_path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    soup = BeautifulSoup(html, "lxml")
+
+    title_tag = soup.find("meta", property="og:title")
+    title = title_tag["content"] if title_tag else html_path.stem
+
+    desc_tag = soup.find("meta", property="og:description")
+    excerpt = desc_tag["content"] if desc_tag else ""
+
+    img_tag = soup.find("meta", property="og:image")
+    image = img_tag["content"] if img_tag else ""
+
+    time_tag = soup.find("meta", property="article:published_time")
+    published_time = time_tag["content"] if time_tag else ""
+
+    category = extract_category(soup)
+
+    # 작성자: author-profile-image의 alt + src
+    author_img_tag = soup.find("img", class_="author-profile-image")
+    author_name = author_img_tag.get("alt", "") if author_img_tag else ""
+    author_img = author_img_tag.get("src", "") if author_img_tag else ""
+
+    return {
+        "title": title,
+        "excerpt": excerpt,
+        "image": image,
+        "published_time": published_time,
+        "category": category,
+        "author_name": author_name,
+        "author_img": author_img,
+        "slug": html_path.stem,
+    }
+
+
+def _format_date_ko(iso_str: str) -> str:
+    """ISO 날짜 → '2026년 3월 9일 월요일' 형식."""
+    try:
+        from datetime import datetime, timezone
+        dt = datetime.fromisoformat(iso_str.replace("Z", "+00:00"))
+        weekdays = ["월요일", "화요일", "수요일", "목요일", "금요일", "토요일", "일요일"]
+        return f"{dt.year}년 {dt.month}월 {dt.day}일 {weekdays[dt.weekday()]}"
+    except (ValueError, IndexError):
+        return ""
+
+
+def _build_post_card(
+    meta: dict,
+    tag_slug: str,
+) -> BeautifulSoup:
+    """메타데이터로 <article class="post-card"> 생성.
+
+    href는 블로그 절대 URL로 설정 — HtmlLocalizer._rewrite_internal_links가
+    로컬 상대경로로 변환.
+    """
+    post_url = meta["url"]
+    category = meta["category"]
+    tag_class = f" tag-{tag_slug}" if tag_slug else ""
+    date_str = _format_date_ko(meta["published_time"])
+
+    card_html = f"""\
+<article class="post-card post{tag_class}">
+<a class="post-card-image-link" href="{post_url}">
+<img alt="{meta['title']}" class="post-card-image" loading="lazy"
+ sizes="(max-width: 1000px) 400px, 700px" src="{meta['image']}"/>
+</a>
+<div class="post-card-content">
+<a class="post-card-content-link" href="{post_url}">
+<header class="post-card-header">
+<div class="post-card-primary-tag">{category}</div>
+<h2 class="post-card-title">{meta['title']}</h2>
+</header>
+<section class="post-card-excerpt"><p>{meta['excerpt']}</p></section>
+</a>
+<footer class="post-card-meta">
+<ul class="author-list"><li class="author-list-item">
+<div class="author-name-tooltip">{meta['author_name']}</div>
+<span class="static-avatar">
+<img alt="{meta['author_name']}" class="author-profile-image" src="{meta['author_img']}"/>
+</span>
+</li></ul>
+<div class="post-card-byline-content">
+<span>{meta['author_name']}</span>
+<span class="post-card-byline-date"><time datetime="{meta['published_time']}">{date_str}</time></span>
+</div>
+</footer>
+</div>
+</article>"""
+    return BeautifulSoup(card_html, "html.parser")
+
+
+def _collect_all_post_meta(
+    html_dir: Path,
+    done_html_file: Path,
+) -> list[dict]:
+    """로컬 HTML 전체에서 메타데이터를 1회 수집. published_time 내림차순."""
+    html_index = build_html_index(html_dir, done_html_file)
+    results = []
+    for url, html_path in html_index.items():
+        meta = _extract_post_meta(html_path)
+        if meta is None:
+            continue
+        meta["url"] = url
+        meta["html_path"] = html_path
+        results.append(meta)
+    results.sort(key=lambda m: m["published_time"], reverse=True)
+    return results
+
+
+def _find_prob_linked_slugs(
+    all_posts: list[dict],
+) -> set[str]:
+    """확률 정보 카테고리에서 2단계 링크 체인으로 도달 가능한 slug 집합 반환.
+
+    확률 정보 포스트 → 허브 페이지 → 개별 영웅/아티팩트 페이지.
+    이들은 이미 확률 정보 메뉴로 접근 가능하므로 index_all에서 제외.
+    """
+    no_cat_slugs = {m["slug"] for m in all_posts if not m["category"]}
+    slug_to_path = {m["slug"]: m["html_path"] for m in all_posts}
+
+    def _extract_linked(source_slugs: set[str]) -> set[str]:
+        linked = set()
+        for slug in source_slugs:
+            path = slug_to_path.get(slug)
+            if path is None or not path.is_file():
+                continue
+            soup = BeautifulSoup(path.read_text(encoding="utf-8"), "lxml")
+            for a in soup.find_all("a", href=True):
+                m = re.search(
+                    r"blog-ko\.lordofheroes\.com/([^/]+)/?$", a["href"],
+                )
+                if m and m.group(1) in no_cat_slugs:
+                    linked.add(m.group(1))
+        return linked
+
+    # 1단계: 확률 정보 → 허브
+    prob_slugs = {m["slug"] for m in all_posts if m["category"] == "확률 정보"}
+    level1 = _extract_linked(prob_slugs)
+    # 2단계: 허브 → 개별
+    level2 = _extract_linked(level1)
+    return level1 | level2
 
 
 def _build_listing_page(
-    page1_soup: BeautifulSoup,
-    all_articles: list,
+    template_soup: BeautifulSoup,
+    cards: list[BeautifulSoup],
+    total_count: int,
 ) -> BeautifulSoup:
-    """페이지 1 soup의 post-feed를 전체 article 목록으로 교체."""
-    post_feed = page1_soup.find("div", class_="post-feed")
+    """템플릿 soup의 post-feed를 생성된 카드로 교체."""
+    post_feed = template_soup.find("div", class_="post-feed")
     post_feed.clear()
-    for article in all_articles:
-        post_feed.append(article)
+    for card in cards:
+        post_feed.append(card)
 
-    # 포스트 수 업데이트
-    desc = page1_soup.find("h2", class_="site-description")
+    desc = template_soup.find("h2", class_="site-description")
     if desc:
-        desc.string = f"A collection of {len(all_articles)} posts"
+        desc.string = f"A collection of {total_count} posts"
 
-    # rel="next"/"prev" 제거 (단일 페이지이므로)
     for rel_val in ("next", "prev"):
-        for link in page1_soup.find_all("link", attrs={"rel": rel_val}):
+        for link in template_soup.find_all("link", attrs={"rel": rel_val}):
             link.decompose()
 
-    return page1_soup
+    return template_soup
 
 
 # ---------------------------------------------------------------------------
@@ -466,6 +659,7 @@ def _process_post(
     css_downloader: CssDownloader,
     html_local_dir: Path,
     failed_log: FailedLog,
+    site_image_downloader: SiteImageDownloader | None = None,
 ) -> bool:
     try:
         html_text = html_path.read_text(encoding="utf-8")
@@ -480,6 +674,7 @@ def _process_post(
 
     localizer = HtmlLocalizer(
         soup, post_url, image_map, slug_map, category, css_downloader,
+        site_image_downloader,
     )
     output = localizer.localize()
 
@@ -550,6 +745,7 @@ def run_html_local(
     fail_lock = threading.Lock()
     failed_log = FailedLog(failed_file, fail_lock)
     css_downloader = CssDownloader(ASSETS_DIR)
+    site_img_downloader = SiteImageDownloader(ASSETS_DIR)
 
     def process_fn(url: str, date: str) -> bool:
         if url in done_urls:
@@ -561,6 +757,7 @@ def run_html_local(
         success = _process_post(
             html_path, url, image_map, slug_map,
             css_downloader, html_local_dir, failed_log,
+            site_img_downloader,
         )
         if success:
             slug = html_path.stem
@@ -595,33 +792,55 @@ def generate_listing_pages(
     image_map: dict[str, str],
     slug_map: dict[str, str],
     html_local_dir: Path = HTML_LOCAL_DIR,
+    html_dir: Path = HTML_DIR,
+    done_html_file: Path | None = None,
 ) -> None:
-    """카테고리 목록 페이지와 홈 인덱스를 서버에서 fetch하여 생성."""
+    """카테고리 목록 페이지와 홈 인덱스를 생성.
+
+    페이지 1만 fetch하여 레이아웃 템플릿으로 사용하고,
+    포스트 카드는 로컬 HTML 메타데이터에서 생성. published_time 내림차순.
+    """
     ensure_utf8_console()
     html_local_dir.mkdir(parents=True, exist_ok=True)
     ASSETS_DIR.mkdir(parents=True, exist_ok=True)
 
+    if done_html_file is None:
+        done_html_file = ROOT_DIR / "done_html.txt"
+
     css_downloader = CssDownloader(ASSETS_DIR)
+    site_img_downloader = SiteImageDownloader(ASSETS_DIR)
     generated = 0
+
+    # 전체 메타데이터 1회 수집
+    print("[LISTING] 로컬 HTML 메타데이터 수집 중...")
+    all_posts = _collect_all_post_meta(html_dir, done_html_file)
+    print(f"[LISTING] 전체 {len(all_posts)}개 포스트 수집 완료")
+
+    # 카테고리별 분류
+    by_category: dict[str, list[dict]] = {}
+    for meta in all_posts:
+        cat = meta["category"]
+        by_category.setdefault(cat, []).append(meta)
 
     # 카테고리 목록 페이지
     for tag_slug, category in TAG_SLUG_TO_CATEGORY.items():
         tag_url = f"{_BLOG_BASE}/tag/{tag_slug}/"
-        print(f"[LISTING] {category} fetch 시작: {tag_url}")
+        print(f"[LISTING] {category} 템플릿 로드: {tag_url}")
 
-        result = _fetch_all_articles(tag_url)
-        if result is None:
-            print(f"[LISTING] {category} fetch 실패, 건너뜀")
+        template = _fetch_listing_template(tag_url)
+        if template is None:
+            print(f"[LISTING] {category} 템플릿 실패, 건너뜀")
             continue
 
-        page1_soup, all_articles = result
-        print(f"[LISTING] {category}: {len(all_articles)}개 포스트 수집")
+        posts = by_category.get(category, [])
+        print(f"[LISTING] {category}: {len(posts)}개 포스트 (로컬)")
 
-        combined_soup = _build_listing_page(page1_soup, all_articles)
+        cards = [_build_post_card(m, tag_slug) for m in posts]
+        combined_soup = _build_listing_page(template, cards, len(posts))
 
         localizer = HtmlLocalizer(
             combined_soup, tag_url, image_map, slug_map,
-            category, css_downloader,
+            category, css_downloader, site_img_downloader,
         )
         output = localizer.localize()
 
@@ -631,21 +850,27 @@ def generate_listing_pages(
         generated += 1
 
     # 블로그 홈페이지 전체 목록 → html_local/index_all.html
+    # 확률 정보 링크 체인으로 도달 가능한 페이지 제외 (이미 메뉴로 접근 가능)
+    prob_slugs = _find_prob_linked_slugs(all_posts)
+    index_all_posts = [m for m in all_posts if m["slug"] not in prob_slugs]
+    print(
+        f"[LISTING] 확률 정보 링크 체인 {len(prob_slugs)}건 제외 "
+        f"→ index_all 대상: {len(index_all_posts)}건"
+    )
+
     home_url = f"{_BLOG_BASE}/"
-    print(f"[LISTING] 홈페이지 fetch 시작: {home_url}")
+    print(f"[LISTING] 홈페이지 템플릿 로드: {home_url}")
 
-    result = _fetch_all_articles(home_url)
-    if result is None:
-        print("[LISTING] 홈페이지 fetch 실패")
+    template = _fetch_listing_template(home_url)
+    if template is None:
+        print("[LISTING] 홈페이지 템플릿 실패")
     else:
-        page1_soup, all_articles = result
-        print(f"[LISTING] 홈페이지: {len(all_articles)}개 포스트 수집")
-
-        combined_soup = _build_listing_page(page1_soup, all_articles)
+        cards = [_build_post_card(m, "") for m in index_all_posts]
+        combined_soup = _build_listing_page(template, cards, len(index_all_posts))
 
         localizer = HtmlLocalizer(
             combined_soup, home_url, image_map, slug_map,
-            "", css_downloader,
+            "", css_downloader, site_img_downloader,
         )
         output = localizer.localize()
 
