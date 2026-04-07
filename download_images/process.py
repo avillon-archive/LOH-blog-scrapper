@@ -341,7 +341,7 @@ def _supplement_alt_images(
         print(f"[보충] 소스 로그에 항목 없음")
         return
 
-    post_date_map = {url: date for url, date in posts}
+    post_date_map = {url: date for url, date, *_ in posts}
     target_posts = [(url, post_date_map.get(url, "")) for url in log_entries
                     if url in post_date_map]
 

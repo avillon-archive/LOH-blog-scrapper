@@ -119,7 +119,7 @@ def run_images(
             print("[이미지] 실패 파일이 없습니다.")
             return
         fail_posts = load_failed_post_urls(FAILED_FILE)
-        posts = [(url, date) for url, date in posts if url in fail_posts]
+        posts = [(url, date, *rest) for url, date, *rest in posts if url in fail_posts]
         print(f"[이미지] 재처리 대상: {len(posts)}개 포스트")
         if not posts:
             print("[이미지] 재처리 대상이 없습니다.")
@@ -165,7 +165,7 @@ def run_images(
                 multilang_date_index=multilang_date_index,
                 kakao_pf_index=kakao_pf_index,
             ): (url, date)
-            for url, date in posts
+            for url, date, *_ in posts
         }
         for future in as_completed(future_to_post):
             post_url, _ = future_to_post[future]

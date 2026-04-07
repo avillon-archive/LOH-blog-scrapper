@@ -243,12 +243,12 @@ def fetch_with_retry(
     return None
 
 
-def load_posts(filepath: str | Path) -> list[tuple[str, str]]:
+def load_posts(filepath: str | Path) -> list[tuple[str, str, str]]:
     """
     Load all_posts.txt / custom_posts.txt
-    Each line: URL<TAB>YYYY-MM-DD
+    Each line: URL<TAB>lastmod[<TAB>published_time]
     """
-    posts = []
+    posts: list[tuple[str, str, str]] = []
     path = Path(filepath)
     if not path.exists():
         print(f"[warning] file not found: {filepath}")
@@ -258,11 +258,11 @@ def load_posts(filepath: str | Path) -> list[tuple[str, str]]:
             line = line.strip()
             if not line or line.startswith("#"):
                 continue
-            parts = line.split("\t", 1)
-            if len(parts) == 2:
-                posts.append((parts[0].strip(), parts[1].strip()))
-            elif len(parts) == 1:
-                posts.append((parts[0].strip(), ""))
+            parts = line.split("\t")
+            url = parts[0].strip()
+            lastmod = parts[1].strip() if len(parts) >= 2 else ""
+            published = parts[2].strip() if len(parts) >= 3 else ""
+            posts.append((url, lastmod, published))
     return posts
 
 
@@ -533,7 +533,7 @@ def run_pipeline(
     """
     if retry_mode:
         fail_posts = failed_log.load_post_urls()
-        posts = [(url, date) for url, date in posts if url in fail_posts]
+        posts = [(url, date, *rest) for url, date, *rest in posts if url in fail_posts]
         print(f"[{label}] 재처리 대상: {len(posts)}개 포스트")
         if not posts:
             print(f"[{label}] 재처리 대상이 없습니다.")
@@ -551,7 +551,7 @@ def run_pipeline(
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         future_to_post = {
             executor.submit(process_fn, url, date): (url, date)
-            for url, date in posts
+            for url, date, *_ in posts
         }
         for future in as_completed(future_to_post):
             post_url, _ = future_to_post[future]

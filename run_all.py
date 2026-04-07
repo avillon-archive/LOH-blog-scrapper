@@ -41,6 +41,7 @@ from build_posts_list import (
     build_links_and_write,
     fetch_newest_sitemap_date,
     fetch_newest_single_sitemap_date,
+    fill_published_times,
     SITEMAP_URL,
     SITEMAP_PAGES_URL,
 )
@@ -380,6 +381,9 @@ def main():
                      force_download=force_download if html_is_primary else False,
                      max_workers=max_workers)
             html_index = build_html_index(HTML_DIR, DONE_HTML_FILE)
+            fill_published_times()
+            fill_published_times(PAGES_FILE)
+            build_links_and_write()
         elif step == "images":
             print("▶ 이미지 다운로드 시작")
             print("━" * 60)

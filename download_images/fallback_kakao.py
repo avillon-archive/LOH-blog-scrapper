@@ -154,6 +154,9 @@ def _match_kakao_pf_post(
     if not candidates:
         return None
     if len(candidates) == 1:
+        ratio = difflib.SequenceMatcher(None, blog_title, candidates[0].title).ratio()
+        if ratio < 0.3:
+            return None
         return candidates[0]
 
     best: KakaoPFPost | None = None

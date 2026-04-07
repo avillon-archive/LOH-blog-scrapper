@@ -7,7 +7,9 @@ import sys
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
-from utils import fetch_with_retry, load_posts
+from bs4 import BeautifulSoup
+
+from utils import build_html_index, fetch_with_retry, load_posts
 
 SITEMAP_URL = "https://blog-ko.lordofheroes.com/sitemap-posts.xml"
 SITEMAP_PAGES_URL = "https://blog-ko.lordofheroes.com/sitemap-pages.xml"
@@ -15,6 +17,8 @@ ROOT_DIR = Path(__file__).parent / "loh_blog"
 OUTPUT_FILE = ROOT_DIR / "all_posts.txt"
 PAGES_OUTPUT_FILE = ROOT_DIR / "all_pages.txt"
 LINKS_OUTPUT_FILE = ROOT_DIR / "all_links.txt"
+HTML_DIR = ROOT_DIR / "html"
+DONE_HTML_FILE = ROOT_DIR / "done_html.txt"
 
 # Date extractor from <lastmod> values.
 DATE_RE = re.compile(r"(\d{4}-\d{2}-\d{2})")
@@ -76,12 +80,21 @@ def _build_sitemap_file(
 ) -> tuple[int, list[tuple[str, str]]]:
     """범용 단일 사이트맵 fetch → 정렬 → 파일 저장.
 
+    기존 파일에 published_time(3번째 컬럼)이 있으면 보존한다.
+
     Returns:
         (작성된 URL 항목 수, entries 리스트).
     Raises:
         Exception: sitemap fetch/parse 실패 또는 항목 없음.
     """
     ROOT_DIR.mkdir(parents=True, exist_ok=True)
+
+    existing_published: dict[str, str] = {}
+    if output_file.exists():
+        for url, _lastmod, published in load_posts(output_file):
+            if published:
+                existing_published[url] = published
+
     xml = fetch_sitemap(sitemap_url)
     entries = parse_sitemap(xml)
     if not entries:
@@ -93,10 +106,11 @@ def _build_sitemap_file(
     # 날짜 내림차순 정렬 (날짜 없는 항목은 맨 뒤)
     entries.sort(key=lambda x: (x[1] != "", x[1]), reverse=True)
 
-    output_file.write_text(
-        "\n".join(f"{url}\t{date}" for url, date in entries) + "\n",
-        encoding="utf-8",
-    )
+    lines: list[str] = []
+    for url, date in entries:
+        pub = existing_published.get(url, "")
+        lines.append(f"{url}\t{date}\t{pub}" if pub else f"{url}\t{date}")
+    output_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return len(entries), entries
 
 
@@ -160,13 +174,13 @@ def build_links_and_write() -> int:
         저장된 항목 수.
     """
     ROOT_DIR.mkdir(parents=True, exist_ok=True)
-    merged: dict[str, str] = {}
+    merged: dict[str, tuple[str, str]] = {}
 
     # pages 먼저 로드 후 posts로 덮어써서 posts 우선 보장
     for filepath in (PAGES_OUTPUT_FILE, OUTPUT_FILE):
-        for url, date in load_posts(filepath):
+        for url, date, published in load_posts(filepath):
             if url:
-                merged[url] = date
+                merged[url] = (date, published)
 
     if not merged:
         raise ValueError(
@@ -176,15 +190,56 @@ def build_links_and_write() -> int:
 
     entries = sorted(
         merged.items(),
-        key=lambda x: (x[1] != "", x[1]),
+        key=lambda x: (x[1][0] != "", x[1][0]),
         reverse=True,
     )
 
-    LINKS_OUTPUT_FILE.write_text(
-        "\n".join(f"{url}\t{date}" for url, date in entries) + "\n",
-        encoding="utf-8",
-    )
+    lines: list[str] = []
+    for url, (date, published) in entries:
+        lines.append(f"{url}\t{date}\t{published}" if published else f"{url}\t{date}")
+    LINKS_OUTPUT_FILE.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return len(entries)
+
+
+def fill_published_times(posts_file: Path | None = None) -> int:
+    """로컬 HTML에서 article:published_time을 추출하여 all_posts.txt에 채운다.
+
+    Returns:
+        새로 채운 항목 수.
+    """
+    posts_file = posts_file or OUTPUT_FILE
+    posts = load_posts(posts_file)
+    if not posts:
+        return 0
+
+    html_index = build_html_index(HTML_DIR, DONE_HTML_FILE)
+    filled = 0
+    updated: list[tuple[str, str, str]] = []
+
+    for url, lastmod, published in posts:
+        if published:
+            updated.append((url, lastmod, published))
+            continue
+
+        html_path = html_index.get(url)
+        if not html_path or not html_path.exists():
+            updated.append((url, lastmod, ""))
+            continue
+
+        html_text = html_path.read_text(encoding="utf-8")
+        soup = BeautifulSoup(html_text, "lxml")
+        meta = soup.find("meta", property="article:published_time")
+        pub_value = meta["content"].strip() if meta and meta.get("content") else ""
+        if pub_value:
+            filled += 1
+        updated.append((url, lastmod, pub_value))
+
+    lines: list[str] = []
+    for url, lastmod, published in updated:
+        lines.append(f"{url}\t{lastmod}\t{published}" if published else f"{url}\t{lastmod}")
+    posts_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    print(f"[published_time] {filled}개 항목 채움 (총 {len(updated)}개)")
+    return filled
 
 
 def _print_sitemap_summary(

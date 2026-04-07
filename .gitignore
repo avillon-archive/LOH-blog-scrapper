@@ -10,3 +10,4 @@ __pycache__/
 *.note
 *.txt
 !requirements.txt
+FALLBACK_ANALYSIS.md
