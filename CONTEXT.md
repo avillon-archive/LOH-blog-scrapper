@@ -21,11 +21,17 @@
 | `download_md.py` | HTML → MD 변환·저장 (`markitdown` 패키지 사용) |
 | `download_html.py` | 원문 HTML 저장 |
 | `run_all.py` | 마스터 실행 스크립트 (실행 전 사이트맵 자동 갱신 포함) |
-| `build_posts_list.py` | 사이트맵 파싱 → `loh_blog/all_posts.txt` / `all_pages.txt` / `all_links.txt` 생성 |
+| `build_posts_list.py` | 사이트맵 파싱 → `loh_blog/all_posts.txt` / `all_pages.txt` / `all_links.txt` 생성. `build_multilang_and_write()`로 EN/JA 포스트 목록(`all_posts_en.txt`, `all_posts_ja.txt`) 생성 |
 | `loh_blog/fallback_report.csv` | 폴백 성공 CSV 리포트 (retry 시 자동 생성) |
-| `loh_blog/all_posts.txt` | sitemap-posts.xml URL+날짜 (`URL\tYYYY-MM-DD`, 날짜 **내림차순**) |
-| `loh_blog/all_pages.txt` | sitemap-pages.xml URL+날짜 (`URL\tYYYY-MM-DD`, 날짜 **내림차순**) |
+| `loh_blog/all_posts.txt` | sitemap-posts.xml URL+날짜+published_time (`URL\tYYYY-MM-DD[\tpublished_time]`, 날짜 **내림차순**) |
+| `loh_blog/all_pages.txt` | sitemap-pages.xml URL+날짜+published_time (동일 포맷) |
 | `loh_blog/all_links.txt` | `all_posts.txt` + `all_pages.txt` 병합·중복 제거 목록 (기본 소스) |
+| `loh_blog/all_posts_en.txt` | EN sitemap-posts.xml URL+날짜+published_time |
+| `loh_blog/all_pages_en.txt` | EN sitemap-pages.xml URL+날짜+published_time |
+| `loh_blog/all_links_en.txt` | EN all_posts + all_pages 병합 (이미지 인덱스 소스) |
+| `loh_blog/all_posts_ja.txt` | JA sitemap-posts.xml URL+날짜+published_time |
+| `loh_blog/all_pages_ja.txt` | JA sitemap-pages.xml URL+날짜+published_time |
+| `loh_blog/all_links_ja.txt` | JA all_posts + all_pages 병합 (이미지 인덱스 소스) |
 | `loh_blog/custom_posts.txt` | 수동 작성 URL 목록. `all_posts.txt`와 동일한 포맷. `--custom` 옵션 사용 시 소스로 읽힘 |
 | `requirements.txt` | `requests`, `beautifulsoup4`, `lxml`, `markitdown` |
 
@@ -79,19 +85,26 @@ python3 build_posts_list.py             # all_posts.txt / all_pages.txt / all_li
   images/kakao_pf_log.tsv    ← Kakao PF 폴백 성공 로그
   md/                        ← 카테고리 없는 MD 파일
   md/카테고리명/              ← 카테고리별 MD 파일
-  html/                      ← 카테고리 없는 원문 HTML
-  html/카테고리명/            ← 카테고리별 원문 HTML
+  html/                      ← 카테고리 없는 원문 HTML (KO)
+  html/카테고리명/            ← 카테고리별 원문 HTML (KO)
+  html_en/                   ← EN 원문 HTML (flat)
+  html_ja/                   ← JA 원문 HTML (flat)
   downloaded_urls.txt        ← 이미지 URL 완료 이력 (main:/thumb: prefix)
   done_posts_images.txt      ← 이미지 완료 포스트 URL+이미지 수 (URL\t이미지수)
   fallback_report.csv        ← 폴백 성공 CSV 리포트 (retry 시)
   image_map.tsv              ← clean_url → images/... 상대경로 (ROOT_DIR 기준)
   thumbnail_hashes.txt       ← 썸네일 SHA-256 해시 캐시 (레거시, 마이그레이션용)
   image_hashes.tsv           ← 통합 이미지 해시 캐시 (hash\trel_path\tT/빈값)
+  multilang_published_index.json ← EN/JA published_time 기반 날짜 인덱스 캐시
   done_md.txt                ← MD 완료 이력 (slug\tpost_url)
-  done_html.txt              ← HTML 완료 이력 (slug\tpost_url)
+  done_html.txt              ← HTML 완료 이력 — KO (slug\tpost_url)
+  done_html_en.txt           ← HTML 완료 이력 — EN
+  done_html_ja.txt           ← HTML 완료 이력 — JA
   failed_images.txt          ← 이미지 실패 이력 (post_url\timg_url\treason)
   failed_md.txt              ← MD 실패 이력 (post_url\treason)
-  failed_html.txt            ← HTML 실패 이력 (post_url\treason)
+  failed_html.txt            ← HTML 실패 이력 — KO (post_url\treason)
+  failed_html_en.txt         ← HTML 실패 이력 — EN
+  failed_html_ja.txt         ← HTML 실패 이력 — JA
 ```
 
 MD 파일 내 이미지 참조는 MD 파일 위치 기준 상대경로. `img_prefix`는 `process_post`에서 `target_dir`의 ROOT_DIR 기준 depth로 자동 계산된다.

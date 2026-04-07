@@ -39,6 +39,8 @@
 | `_count_file_lines(posts_file)` | 파일의 유효 행 수(공백·`#` 제외) 반환. `--sample` 상한 계산 시 `LINKS_FILE` 기준으로 호출. 읽기 실패 시 `0`. |
 | `_load_failed_posts_for_retry(selected)` | 선택된 단계의 실패 파일 union → `set[str]`. |
 | `_sample_posts(posts, n, seed)` | 랜덤 샘플링. |
+| `build_multilang_and_write()` | EN/JA sitemap-posts + sitemap-pages → `all_posts_{lang}.txt` + `all_pages_{lang}.txt` + `all_links_{lang}.txt` 생성. `MULTILANG_CONFIGS` dict 참조. |
+| `_build_multilang_links(cfg)` | 개별 언어의 posts + pages → links 병합. |
 
 ## 사이트맵 갱신 흐름
 
@@ -75,12 +77,29 @@ args.sample = min(args.sample, cap)
 ```python
 for step in selected_order:
     if step == "html":
+        # 1) KO HTML 다운로드
         run_html(posts, retry_mode, force_download, max_workers)
+        fill_published_times()
+        fill_published_times(PAGES_FILE)
+        build_links_and_write()
+
+        # 2) EN/JA 포스트+페이지 목록 생성 + HTML 다운로드
+        build_multilang_and_write()  # posts + pages + links per lang
+        for lang, cfg in MULTILANG_CONFIGS.items():
+            lang_links = load_posts(cfg["all_links"])
+            run_html(lang_links, ..., html_dir=cfg["html_dir"],
+                     done_file=cfg["done_html"], failed_file=...)
+            fill_published_times(cfg["all_posts"], cfg["html_dir"], cfg["done_html"])
+            fill_published_times(cfg["all_pages"], cfg["html_dir"], cfg["done_html"])
+
+        # 3) KO + EN/JA 통합 html_index 구축
         html_index = build_html_index(HTML_DIR, DONE_HTML_FILE)
+        for lang, cfg in MULTILANG_CONFIGS.items():
+            html_index.update(build_html_index(cfg["html_dir"], cfg["done_html"]))
     elif step == "images":
-        run_images(posts, retry_mode, force_download, html_index, max_workers)
+        run_images(posts, ...)
     elif step == "md":
-        run_md(posts, retry_mode, force_download, html_index, max_workers)
+        run_md(posts, ...)
 ```
 
-HTML 완료 후 `build_html_index()`로 `{post_url: Path}` 인덱스를 구축하여 이후 단계에 전달한다.
+HTML 완료 후 `build_html_index()`를 KO/EN/JA 각각 호출하여 `{post_url: Path}` 인덱스를 merge, 이후 단계에 전달한다.

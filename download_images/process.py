@@ -71,6 +71,7 @@ def process_post(
     retry_mode: bool = False,
     multilang_date_index: dict[str, list[tuple[str, str]]] | None = None,
     kakao_pf_index: dict[str, list[KakaoPFPost]] | None = None,
+    published_time: str = "",
 ) -> PostProcessResult:
     if post_url in done_post_urls and not retry_mode:
         return PostProcessResult(ok=0, fail=0, post_fetch_ok=True)
@@ -122,6 +123,7 @@ def process_post(
             retry_mode=retry_mode,
             multilang_date_index=multilang_date_index,
             kakao_pf_index=kakao_pf_index,
+            published_time=published_time,
         )
         if how:
             ok += 1
@@ -342,6 +344,7 @@ def _supplement_alt_images(
         return
 
     post_date_map = {url: date for url, date, *_ in posts}
+    post_pub_map = {url: pub for url, _date, pub, *_ in posts if pub}
     target_posts = [(url, post_date_map.get(url, "")) for url in log_entries
                     if url in post_date_map]
 
@@ -367,7 +370,7 @@ def _supplement_alt_images(
     total_supplemented = 0
     completed = 0
 
-    def _process_one_post(post_url: str, post_date: str) -> int:
+    def _process_one_post(post_url: str, post_date: str, published_time: str = "") -> int:
         html_text = fetch_post_html(post_url, html_index)
         if html_text is None:
             return 0
@@ -403,11 +406,13 @@ def _supplement_alt_images(
                 result = _fetch_multilang_wayback_image(
                     post_url, img_url, post_date, utype, idx,
                     multilang_date_index, post_soup_cache,
+                    published_time=published_time,
                 )
             else:
                 result = _fetch_kakao_pf_image(
                     post_url, img_url, post_date, utype, idx,
                     kakao_pf_index, blog_title=blog_title,
+                    published_time=published_time,
                 )
 
             if result is None:
@@ -429,7 +434,7 @@ def _supplement_alt_images(
     report_interval = 10 if len(target_posts) <= 100 else 50
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         future_to_post = {
-            executor.submit(_process_one_post, url, date): url
+            executor.submit(_process_one_post, url, date, post_pub_map.get(url, "")): url
             for url, date in target_posts
         }
         for future in as_completed(future_to_post):

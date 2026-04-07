@@ -143,13 +143,13 @@ class KakaoPFPost(NamedTuple):
 |------|------|
 | `_build_kakao_pf_index() -> dict[str, list[KakaoPFPost]]` | API 페이지네이션으로 게시글 수집. JSON 캐시 파일이 있으면 로드 후 새 포스트만 추가 fetch. `{date: [KakaoPFPost, ...]}` 반환 |
 | `_match_kakao_pf_post(candidates, blog_title) -> KakaoPFPost \| None` | 같은 날짜의 Kakao PF 후보 중 블로그 제목과 가장 유사한 포스트를 `difflib.SequenceMatcher`로 선택 |
-| `_fetch_kakao_pf_image(post_url, img_url, post_date, utype, idx, kakao_pf_index, blog_title) -> tuple \| None` | 매칭된 Kakao PF 포스트에서 이미지 인덱스(idx) 기반으로 대체 이미지 추출 |
+| `_fetch_kakao_pf_image(post_url, img_url, post_date, utype, idx, kakao_pf_index, blog_title, published_time) -> tuple \| None` | 매칭된 Kakao PF 포스트에서 이미지 인덱스(idx) 기반으로 대체 이미지 추출. `published_time[:10]`으로 날짜 lookup (빈 값이면 `post_date` 폴백) |
 
 ### 처리 흐름
 
 1. `run_images`에서 `retry_mode=True` 시 `_build_kakao_pf_index()` 호출
 2. 각 이미지의 `download_one_image`에서 기본 폴백 실패 후 `_fetch_kakao_pf_image()` 시도
-3. `post_date` 기반으로 같은 날짜의 Kakao PF 게시글 탐색 → 제목 유사도 매칭
+3. `published_time[:10]` 기반으로 같은 날짜의 Kakao PF 게시글 탐색 → 제목 유사도 매칭. published_time이 없으면 `post_date`(lastmod) 폴백
 4. 매칭된 포스트의 `media_urls`에서 이미지 인덱스로 대체 이미지 선택
 5. 성공 시 `_kakao_pf_log_buf`에 로그 기록
 
@@ -167,13 +167,14 @@ class KakaoPFPost(NamedTuple):
 
 | 함수 | 설명 |
 |------|------|
-| `_build_multilang_date_index() -> dict[str, list[tuple[str, str]]]` | EN/JA 사이트맵에서 `{date: [(url, lang), ...]}` 인덱스 구축 |
-| `_fetch_multilang_wayback_image(...)` | 대체 언어의 Wayback 포스트 스냅샷에서 이미지 탐색. Phase A → A-2 → B 순서 |
+| `_build_multilang_date_index() -> dict[str, list[tuple[str, str]]]` | EN/JA `all_links_{lang}.txt`에서 `{published_date: [(url, lang), ...]}` 인덱스 구축. 캐시: `multilang_published_index.json` (all_links 파일 mtime 비교) |
+| `_fetch_multilang_wayback_image(..., published_time)` | 대체 언어의 Wayback 포스트 스냅샷에서 이미지 탐색. Phase A → A-2 → B 순서. `published_time[:10]`으로 후보 조회 |
+| `_multilang_post_url_candidates(ko_url, post_date, date_index, published_time)` | slug 교체 후보 + date_index 후보 반환. `published_time[:10]` 우선, 없으면 `post_date` |
 | `_fetch_wayback_img_by_position(alt_post_url, idx, utype, ...)` | Phase B: Wayback 포스트 스냅샷에서 idx(1-based) 위치의 이미지를 다운로드. `<img src>`에서 `/size/wN`을 제거하여 원본 해상도로 fetch |
 
 ### 처리 흐름
 
-1. `run_images`에서 `retry_mode=True` 시 EN/JA 사이트맵 인덱스 구축
+1. `run_images`에서 `retry_mode=True` 시 EN/JA published_time 인덱스 구축 (`all_links_en/ja.txt` 필요)
 2. 각 이미지의 `download_one_image`에서 기본 + Kakao PF 폴백 실패 후 시도
 3. `_fetch_multilang_wayback_image` 내부 3단계:
    - **Phase A**: URL/파일명 기반 — 원본 이미지 URL의 언어별 변환 URL을 Wayback에서 직접 탐색
@@ -209,7 +210,7 @@ class KakaoPFPost(NamedTuple):
 
 ```python
 def run_images(
-    posts: list[tuple[str, str]],
+    posts: list[tuple[str, str, str]],  # (url, lastmod, published_time)
     retry_mode: bool = False,
     retry_multilang: bool = False,
     retry_kakaopf: bool = False,

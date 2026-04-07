@@ -2,12 +2,13 @@
 """EN/JA 다국어 Wayback 폴백."""
 
 import json
+import os
 import urllib.parse
 
 from bs4 import BeautifulSoup
 
-from build_posts_list import fetch_newest_single_sitemap_date, parse_sitemap
-from utils import SIZE_W_RE, fetch_with_retry
+from build_posts_list import MULTILANG_CONFIGS
+from utils import SIZE_W_RE, load_posts
 
 from .constants import (
     BLOG_HOST,
@@ -15,6 +16,7 @@ from .constants import (
     MULTILANG_BLOG_HOSTS,
     MULTILANG_EARLIEST_DATE,
     MULTILANG_INDEX_CACHE,
+    MULTILANG_PUBLISHED_INDEX,
     _KO_SUFFIX_RE,
     _LANG_SUFFIX_MAP,
 )
@@ -57,96 +59,74 @@ def _multilang_image_url_candidates(img_url: str) -> list[tuple[str, str]]:
     return candidates
 
 
-def _load_multilang_cache() -> tuple[dict[str, list[tuple[str, str]]], dict[str, str]]:
-    """캐시 파일에서 date_index와 meta를 로드. 없으면 ({}, {}) 반환."""
-    if not MULTILANG_INDEX_CACHE.exists():
-        return {}, {}
+def _load_published_cache() -> dict[str, list[tuple[str, str]]]:
+    """published_time 기반 캐시 로드. 없으면 {} 반환."""
+    if not MULTILANG_PUBLISHED_INDEX.exists():
+        return {}
     try:
-        with open(MULTILANG_INDEX_CACHE, "r", encoding="utf-8") as f:
+        with open(MULTILANG_PUBLISHED_INDEX, "r", encoding="utf-8") as f:
             raw = json.load(f)
-        meta = raw.pop("_meta", {})
-        index = {d: [(u, l) for u, l in entries] for d, entries in raw.items()}
-        return index, meta
+        raw.pop("_meta", None)
+        return {d: [(u, l) for u, l in entries] for d, entries in raw.items()}
     except (json.JSONDecodeError, KeyError, TypeError):
-        return {}, {}
+        return {}
 
 
-def _save_multilang_cache(
-    date_index: dict[str, list[tuple[str, str]]], meta: dict[str, str]
+def _save_published_cache(
+    date_index: dict[str, list[tuple[str, str]]],
+    meta: dict[str, str],
 ) -> None:
     raw: dict = {d: entries for d, entries in date_index.items()}
     raw["_meta"] = meta
-    with open(MULTILANG_INDEX_CACHE, "w", encoding="utf-8") as f:
+    with open(MULTILANG_PUBLISHED_INDEX, "w", encoding="utf-8") as f:
         json.dump(raw, f, ensure_ascii=False, indent=1)
 
 
 def _build_multilang_date_index() -> dict[str, list[tuple[str, str]]]:
-    """EN/JA 사이트맵을 직접 가져와 {date: [(post_url, lang), ...]} 인덱스를 구축한다."""
-    # 1) 캐시 로드
-    cached_index, cached_meta = _load_multilang_cache()
+    """EN/JA all_links 파일에서 {published_date: [(url, lang), ...]} 인덱스를 구축한다."""
+    from pathlib import Path
 
-    # 2) 각 언어별 최신 날짜 비교
-    need_refresh: dict[str, bool] = {}
-    for lang, lang_host in MULTILANG_BLOG_HOSTS.items():
-        sitemap_url = f"https://{lang_host}/sitemap-posts.xml"
-        remote_date = fetch_newest_single_sitemap_date(sitemap_url)
-        cached_date = cached_meta.get(f"{lang}_latest", "")
+    source_files: list[tuple[str, Path]] = []
+    for lang, cfg in MULTILANG_CONFIGS.items():
+        links_file = cfg["all_links"]
+        if links_file.exists():
+            source_files.append((lang, links_file))
 
-        if remote_date and cached_date == remote_date:
-            print(f"  [{lang.upper()}] 최신 상태 ({cached_date}), 갱신 불필요")
-        else:
-            need_refresh[lang] = True
-            if remote_date:
-                print(f"  [{lang.upper()}] 갱신 필요 (캐시: {cached_date or '없음'} → 원격: {remote_date})")
-            else:
-                print(f"  [{lang.upper()}] 원격 날짜 확인 실패, 전체 fetch 시도")
+    if not source_files:
+        print("  EN/JA all_links 파일 없음, 빈 인덱스 반환")
+        return {}
 
-    # 3) 모두 최신이면 캐시 반환
-    if not need_refresh and cached_index:
-        return cached_index
+    # 캐시 유효성: all_links 파일 mtime vs 캐시 mtime
+    if MULTILANG_PUBLISHED_INDEX.exists():
+        cache_mtime = os.path.getmtime(MULTILANG_PUBLISHED_INDEX)
+        if all(os.path.getmtime(pf) <= cache_mtime for _, pf in source_files):
+            cached = _load_published_cache()
+            if cached:
+                total = sum(len(v) for v in cached.values())
+                print(f"  published_time 인덱스 캐시 유효 ({len(cached)}일, {total}건)")
+                return cached
 
-    # 4) 변경된 언어만 fetch, 나머지는 캐시 유지
-    date_index: dict[str, list[tuple[str, str]]] = (
-        {k: list(v) for k, v in cached_index.items()} if cached_index else {}
-    )
-    new_meta = dict(cached_meta)
-
-    for lang in need_refresh:
-        date_index = {
-            d: [(u, l) for u, l in entries if l != lang]
-            for d, entries in date_index.items()
-        }
-        date_index = {d: entries for d, entries in date_index.items() if entries}
-
-    for lang in need_refresh:
-        lang_host = MULTILANG_BLOG_HOSTS[lang]
-        sitemap_url = f"https://{lang_host}/sitemap-posts.xml"
-
-        resp = fetch_with_retry(sitemap_url, allow_redirects=True, timeout=30)
-        if not resp:
-            print(f"  [{lang.upper()}] 사이트맵 fetch 실패, 건너뜀")
-            continue
-
-        resp.encoding = resp.apparent_encoding or "utf-8"
-        try:
-            entries = parse_sitemap(resp.text)
-        except Exception as exc:
-            print(f"  [{lang.upper()}] 사이트맵 파싱 실패: {exc}")
-            continue
-
+    # 재구축
+    date_index: dict[str, list[tuple[str, str]]] = {}
+    meta: dict[str, str] = {}
+    for lang, links_file in source_files:
         count = 0
-        latest = ""
-        for post_url, date in entries:
-            if date:
-                date_index.setdefault(date, []).append((post_url, lang))
-                count += 1
-                if date > latest:
-                    latest = date
-        new_meta[f"{lang}_latest"] = latest
-        print(f"  [{lang.upper()}] {count}개 포스트 인덱싱 완료")
+        for url, _lastmod, published in load_posts(links_file):
+            if not published:
+                continue
+            pub_date = published[:10]
+            date_index.setdefault(pub_date, []).append((url, lang))
+            count += 1
+        meta[f"{lang}_count"] = str(count)
+        print(f"  [{lang.upper()}] {count}건 published_time 인덱싱")
 
-    # 5) 캐시 저장
-    _save_multilang_cache(date_index, new_meta)
+    _save_published_cache(date_index, meta)
+
+    # 구 sitemap 캐시 삭제
+    if MULTILANG_INDEX_CACHE.exists():
+        MULTILANG_INDEX_CACHE.unlink()
+        print("  구 sitemap 인덱스 캐시 삭제")
+
     return date_index
 
 
@@ -154,22 +134,25 @@ def _multilang_post_url_candidates(
     ko_post_url: str,
     post_date: str,
     date_index: dict[str, list[tuple[str, str]]],
+    published_time: str = "",
 ) -> list[tuple[str, str]]:
     """KO 포스트 URL에 대응하는 EN/JA 포스트 URL 후보를 반환한다."""
     candidates: list[tuple[str, str]] = []
     seen: set[str] = set()
 
+    check_date = published_time[:10] if published_time else post_date
     for lang, lang_host in MULTILANG_BLOG_HOSTS.items():
-        if post_date and post_date < MULTILANG_EARLIEST_DATE.get(lang, ""):
+        if check_date and check_date < MULTILANG_EARLIEST_DATE.get(lang, ""):
             continue
         slug_url = ko_post_url.replace(BLOG_HOST, lang_host)
         if slug_url != ko_post_url and slug_url not in seen:
             seen.add(slug_url)
             candidates.append((slug_url, lang))
 
-    if post_date and post_date in date_index:
-        for alt_url, lang in date_index[post_date]:
-            if post_date < MULTILANG_EARLIEST_DATE.get(lang, ""):
+    lookup_date = published_time[:10] if published_time else post_date
+    if lookup_date and lookup_date in date_index:
+        for alt_url, lang in date_index[lookup_date]:
+            if lookup_date < MULTILANG_EARLIEST_DATE.get(lang, ""):
                 continue
             if alt_url not in seen:
                 seen.add(alt_url)
@@ -230,28 +213,32 @@ def _fetch_multilang_wayback_image(
     idx: int,
     date_index: dict[str, list[tuple[str, str]]],
     post_soup_cache: PostSoupCache = None,
+    published_time: str = "",
 ) -> tuple[bytes, str, str, str, str] | None:
     """다국어 블로그 Wayback 스냅샷에서 이미지를 탐색하는 통합 폴백 함수.
 
     Returns:
         성공 시 (content, final_url, content_type, cd, fallback_post_url) 5-tuple.
     """
-    if post_date and all(
-        post_date < earliest for earliest in MULTILANG_EARLIEST_DATE.values()
+    check_date = published_time[:10] if published_time else post_date
+    if check_date and all(
+        check_date < earliest for earliest in MULTILANG_EARLIEST_DATE.values()
     ):
         return None
 
     # Phase A: URL/파일명 기반 매칭
     img_candidates = _multilang_image_url_candidates(img_url)
     for candidate_img_url, lang in img_candidates:
-        if post_date and post_date < MULTILANG_EARLIEST_DATE.get(lang, ""):
+        if check_date and check_date < MULTILANG_EARLIEST_DATE.get(lang, ""):
             continue
         payload = _fetch_wayback_image(candidate_img_url)
         if payload:
             return (*payload, "")
 
     # Phase A-2: 포스트 HTML에서 URL 매칭
-    post_candidates = _multilang_post_url_candidates(post_url, post_date, date_index)
+    post_candidates = _multilang_post_url_candidates(
+        post_url, post_date, date_index, published_time=published_time,
+    )
     for alt_post_url, lang in post_candidates:
         lang_img_candidates = [u for u, l in img_candidates if l == lang]
         for candidate_img_url in lang_img_candidates:

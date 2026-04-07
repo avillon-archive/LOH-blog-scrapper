@@ -20,6 +20,28 @@ LINKS_OUTPUT_FILE = ROOT_DIR / "all_links.txt"
 HTML_DIR = ROOT_DIR / "html"
 DONE_HTML_FILE = ROOT_DIR / "done_html.txt"
 
+# EN/JA 사이트맵 및 출력 경로
+MULTILANG_CONFIGS: dict[str, dict[str, str | Path]] = {
+    "en": {
+        "sitemap_posts": "https://blog-en.lordofheroes.com/sitemap-posts.xml",
+        "sitemap_pages": "https://blog-en.lordofheroes.com/sitemap-pages.xml",
+        "all_posts": ROOT_DIR / "all_posts_en.txt",
+        "all_pages": ROOT_DIR / "all_pages_en.txt",
+        "all_links": ROOT_DIR / "all_links_en.txt",
+        "html_dir": ROOT_DIR / "html_en",
+        "done_html": ROOT_DIR / "done_html_en.txt",
+    },
+    "ja": {
+        "sitemap_posts": "https://blog-ja.lordofheroes.com/sitemap-posts.xml",
+        "sitemap_pages": "https://blog-ja.lordofheroes.com/sitemap-pages.xml",
+        "all_posts": ROOT_DIR / "all_posts_ja.txt",
+        "all_pages": ROOT_DIR / "all_pages_ja.txt",
+        "all_links": ROOT_DIR / "all_links_ja.txt",
+        "html_dir": ROOT_DIR / "html_ja",
+        "done_html": ROOT_DIR / "done_html_ja.txt",
+    },
+}
+
 # Date extractor from <lastmod> values.
 DATE_RE = re.compile(r"(\d{4}-\d{2}-\d{2})")
 
@@ -164,6 +186,65 @@ def build_pages_and_write() -> tuple[int, list[tuple[str, str]]]:
     return _build_sitemap_file(SITEMAP_PAGES_URL, PAGES_OUTPUT_FILE)
 
 
+def build_multilang_and_write() -> dict[str, tuple[int, list[tuple[str, str]]]]:
+    """EN/JA sitemap-posts/pages → all_posts/all_pages/all_links 갱신.
+
+    Returns:
+        {lang: (posts 항목 수, entries)} dict.  실패한 언어는 포함되지 않는다.
+    """
+    results: dict[str, tuple[int, list[tuple[str, str]]]] = {}
+    for lang, cfg in MULTILANG_CONFIGS.items():
+        # posts
+        try:
+            count, entries = _build_sitemap_file(cfg["sitemap_posts"], cfg["all_posts"])
+            results[lang] = (count, entries)
+            print(f"[포스트 목록] {cfg['all_posts'].name} 갱신 완료 ({count}개 URL)")
+        except Exception as e:
+            print(f"[포스트 목록] {cfg['all_posts'].name} 갱신 실패: {e}")
+
+        # pages
+        try:
+            count_pages, _ = _build_sitemap_file(cfg["sitemap_pages"], cfg["all_pages"])
+            print(f"[포스트 목록] {cfg['all_pages'].name} 갱신 완료 ({count_pages}개 URL)")
+        except Exception as e:
+            print(f"[포스트 목록] {cfg['all_pages'].name} 갱신 실패: {e}")
+
+        # links (posts + pages 병합)
+        try:
+            count_links = _build_multilang_links(cfg)
+            print(f"[포스트 목록] {cfg['all_links'].name} 갱신 완료 ({count_links}개 URL)")
+        except Exception as e:
+            print(f"[포스트 목록] {cfg['all_links'].name} 갱신 실패: {e}")
+
+    return results
+
+
+def _build_multilang_links(cfg: dict[str, str | Path]) -> int:
+    """posts + pages → all_links 병합. build_links_and_write() 와 동일 로직."""
+    merged: dict[str, tuple[str, str]] = {}
+
+    # pages 먼저 로드 후 posts로 덮어써서 posts 우선
+    for filepath in (cfg["all_pages"], cfg["all_posts"]):
+        for url, date, published in load_posts(filepath):
+            if url:
+                merged[url] = (date, published)
+
+    if not merged:
+        raise ValueError(f"병합 대상 없음: {cfg['all_posts'].name} / {cfg['all_pages'].name}")
+
+    entries = sorted(
+        merged.items(),
+        key=lambda x: (x[1][0] != "", x[1][0]),
+        reverse=True,
+    )
+
+    lines: list[str] = []
+    for url, (date, published) in entries:
+        lines.append(f"{url}\t{date}\t{published}" if published else f"{url}\t{date}")
+    cfg["all_links"].write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return len(entries)
+
+
 def build_links_and_write() -> int:
     """all_posts.txt + all_pages.txt → all_links.txt 병합·중복 제거.
 
@@ -201,18 +282,24 @@ def build_links_and_write() -> int:
     return len(entries)
 
 
-def fill_published_times(posts_file: Path | None = None) -> int:
-    """로컬 HTML에서 article:published_time을 추출하여 all_posts.txt에 채운다.
+def fill_published_times(
+    posts_file: Path | None = None,
+    html_dir: Path | None = None,
+    done_html_file: Path | None = None,
+) -> int:
+    """로컬 HTML에서 article:published_time을 추출하여 포스트 파일에 채운다.
 
     Returns:
         새로 채운 항목 수.
     """
     posts_file = posts_file or OUTPUT_FILE
+    html_dir = html_dir or HTML_DIR
+    done_html_file = done_html_file or DONE_HTML_FILE
     posts = load_posts(posts_file)
     if not posts:
         return 0
 
-    html_index = build_html_index(HTML_DIR, DONE_HTML_FILE)
+    html_index = build_html_index(html_dir, done_html_file)
     filled = 0
     updated: list[tuple[str, str, str]] = []
 
