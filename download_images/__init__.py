@@ -2,7 +2,6 @@
 """Image downloader for Lord of Heroes blog posts."""
 
 from .persistence import backfill_image_map
-from .process import _reprocess_fallbacks_cleanup
-from .runner import run_images
+from .runner import run_fallback_images, run_images
 
-__all__ = ["run_images", "_reprocess_fallbacks_cleanup", "backfill_image_map"]
+__all__ = ["run_images", "run_fallback_images", "backfill_image_map"]

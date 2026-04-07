@@ -10,8 +10,6 @@ from bs4 import BeautifulSoup
 from utils import ROOT_DIR
 
 from .constants import DOWNLOADABLE_EXTS, KAKAO_PF_PROFILE
-from .fallback_kakao import _fetch_kakao_pf_image
-from .fallback_multilang import _fetch_multilang_wayback_image
 from .fetch import (
     _fetch_image,
     _fetch_wayback_gdrive_from_post,
@@ -21,14 +19,12 @@ from .fetch import (
     _filename_from_cd,
 )
 from .hashing import _sha256_bytes
-from .models import KakaoPFPost, PostSoupCache
+from .models import PostSoupCache
 from .persistence import record_failed, save_image
 from .state import (
     _done_buf,
     _img_hash_buf,
-    _kakao_pf_log_buf,
     _map_buf,
-    _multilang_log_buf,
     _save_lock,
     _state_lock,
 )
@@ -110,8 +106,9 @@ def _save_alternative_image(
     filename: str,
     folder: Path,
     source_tag: str = "",
+    root_dir: Path = ROOT_DIR,
 ) -> str | None:
-    """alternative 이미지를 primary와 같은 폴더에 저장하고 상대 경로를 반환한다."""
+    """alternative 이미지를 저장하고 root_dir 기준 상대 경로를 반환한다."""
     folder.mkdir(parents=True, exist_ok=True)
     if source_tag:
         stem = Path(filename).stem
@@ -120,7 +117,7 @@ def _save_alternative_image(
     safe_name = _safe_filename(filename)
     with _save_lock:
         saved = save_image(content, safe_name, folder)
-    return (folder / saved).relative_to(ROOT_DIR).as_posix()
+    return (folder / saved).relative_to(root_dir).as_posix()
 
 
 # ---------------------------------------------------------------------------
@@ -141,20 +138,12 @@ def download_one_image(
     post_soup_cache: PostSoupCache = None,
     *,
     post_date: str = "",
-    blog_title: str = "",
-    retry_mode: bool = False,
-    multilang_date_index: dict[str, list[tuple[str, str]]] | None = None,
-    kakao_pf_index: dict[str, list[KakaoPFPost]] | None = None,
-    published_time: str = "",
-    ko_category: str = "",
 ) -> str:
     """이미지 1건 다운로드. 성공 방식을 나타내는 문자열을 반환한다.
 
     Returns:
         "already"  — 이미 다운로드됨
         "original" — 원본/KO Wayback으로 성공
-        "multilang"— 다국어 Wayback 폴백 성공
-        "kakao"    — KakaoPF 폴백 성공
         "dup"      — 해시 중복 (저장 생략)
         ""         — 실패
     """
@@ -193,51 +182,6 @@ def download_one_image(
         if payload is None and _is_community_cdn(img_url):
             payload = _fetch_wayback_image(img_url, allow_ext_fallback=True, allow_archive=True)
 
-    # ── Kakao PF 폴백 (retry 모드 전용) ──────────────────────────────────
-    kakao_pf_result: tuple[bytes, str, str, str, str] | None = None
-    if payload is None and retry_mode and kakao_pf_index and utype != "linked_direct":
-        kakao_pf_result = _fetch_kakao_pf_image(
-            post_url, img_url, post_date, utype, idx,
-            kakao_pf_index, blog_title=blog_title,
-            published_time=published_time,
-        )
-
-    # ── 다국어 Wayback 폴백 (retry 모드 전용) ────────────────────────────
-    multilang_result: tuple[bytes, str, str, str, str] | None = None
-    if payload is None and retry_mode and multilang_date_index and utype != "linked_direct":
-        multilang_result = _fetch_multilang_wayback_image(
-            post_url, img_url, post_date, utype, idx,
-            multilang_date_index, post_soup_cache,
-            published_time=published_time,
-            ko_lastmod=post_date,
-            ko_category=ko_category,
-        )
-
-    # ── 폴백 결과 선택 ────────────────────────────────────────────────────
-    primary_source: str | None = None
-    alt_result: tuple[bytes, str, str, str, str] | None = None
-    alt_source: str | None = None
-
-    if payload is None and kakao_pf_result and multilang_result:
-        kp_size = len(kakao_pf_result[0])
-        ml_size = len(multilang_result[0])
-        if kp_size >= ml_size:
-            payload = kakao_pf_result[:4]
-            primary_source = kakao_pf_result[4]
-            alt_result = multilang_result
-            alt_source = multilang_result[4]
-        else:
-            payload = multilang_result[:4]
-            primary_source = multilang_result[4]
-            alt_result = kakao_pf_result
-            alt_source = kakao_pf_result[4]
-    elif payload is None and kakao_pf_result:
-        payload = kakao_pf_result[:4]
-        primary_source = kakao_pf_result[4]
-    elif payload is None and multilang_result:
-        payload = multilang_result[:4]
-        primary_source = multilang_result[4]
-
     if payload is None:
         record_failed(post_url, img_url, "download_failed")
         return ""
@@ -246,12 +190,6 @@ def download_one_image(
     filename = _determine_filename(
         utype, img_url, final_url, content_type, content_disposition, idx
     )
-    if primary_source is not None:
-        tag = _source_tag(primary_source)
-        if tag:
-            stem = Path(filename).stem
-            suffix = Path(filename).suffix
-            filename = f"{tag} {stem}{suffix}"
     safe_name = _safe_filename(filename)
 
     # ── Phase 1: in-memory 상태 예약 (_state_lock, 극히 빠름) ────────────
@@ -292,36 +230,7 @@ def download_one_image(
         _img_hash_buf.add(f"{content_hash}\t{rel}\t{'T' if is_thumb else ''}")
 
     _done_buf.add(seen_key)
-    primary_rel = rel if should_save else existing_rel  # type: ignore[possibly-undefined]
-
-    # ── Alternative 이미지 저장 ───────────────────────────────────────────
-    if alt_result is not None:
-        alt_content = alt_result[0]
-        alt_hash = _sha256_bytes(alt_content)
-        if alt_hash != content_hash:
-            alt_filename = _determine_filename(
-                utype, img_url, alt_result[1], alt_result[2], alt_result[3], idx
-            )
-            alt_tag = _source_tag(alt_source) if alt_source else ""
-            alt_rel = _save_alternative_image(alt_content, alt_filename, folder,
-                                              source_tag=alt_tag)
-            if alt_rel and alt_source:
-                if alt_source.startswith("http://pf.kakao.com/"):
-                    _kakao_pf_log_buf.add(f"{alt_rel}\t{post_url}\t{alt_source}\t{img_url}")
-                else:
-                    _multilang_log_buf.add(f"{alt_rel}\t{post_url}\t{alt_source}\t{img_url}")
-
-    # ── 폴백 성공 로그 기록 ───────────────────────────────────────────────
-    if primary_source is not None and primary_rel:
-        if kakao_pf_result and primary_source == kakao_pf_result[4]:
-            _kakao_pf_log_buf.add(f"{primary_rel}\t{post_url}\t{primary_source}\t{img_url}")
-        elif multilang_result and primary_source == multilang_result[4]:
-            _multilang_log_buf.add(f"{primary_rel}\t{post_url}\t{primary_source}\t{img_url}")
 
     if not should_save:
         return "dup"
-    if primary_source is None:
-        return "original"
-    if primary_source.startswith("http://pf.kakao.com/"):
-        return "kakao"
-    return "multilang"
+    return "original"

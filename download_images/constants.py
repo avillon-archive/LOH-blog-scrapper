@@ -19,6 +19,14 @@ KAKAO_PF_LOG_FILE = IMAGES_DIR / "kakao_pf_log.tsv"
 KAKAO_PF_INDEX_FILE = ROOT_DIR / "kakao_pf_index.json"
 FALLBACK_REPORT_FILE = ROOT_DIR / "fallback_report.csv"
 
+# Fallback 전용 (--retry-fallback, 보존 목적 — primary 트래킹과 완전 분리)
+FALLBACK_IMAGES_DIR = ROOT_DIR / "images_fallback"
+FALLBACK_DONE_FILE = ROOT_DIR / "fallback_downloaded_urls.txt"
+FALLBACK_IMAGE_MAP_FILE = ROOT_DIR / "fallback_image_map.tsv"
+FALLBACK_IMG_HASH_FILE = ROOT_DIR / "fallback_image_hashes.tsv"
+FALLBACK_MULTILANG_LOG_FILE = FALLBACK_IMAGES_DIR / "multilang_fallback.tsv"
+FALLBACK_KAKAO_PF_LOG_FILE = FALLBACK_IMAGES_DIR / "kakao_pf_log.tsv"
+
 IMG_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg"}
 ARCHIVE_EXTS = {".zip", ".rar", ".7z", ".tar", ".gz", ".tgz"}
 DOWNLOADABLE_EXTS = IMG_EXTS | ARCHIVE_EXTS

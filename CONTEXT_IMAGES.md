@@ -6,7 +6,7 @@
 
 | 모듈 | 역할 |
 |------|------|
-| `__init__.py` | re-export: `run_images`, `_reprocess_fallbacks_cleanup`, `backfill_image_map` |
+| `__init__.py` | re-export: `run_images`, `run_fallback_images`, `backfill_image_map` |
 | `__main__.py` | CLI (`python -m download_images`) |
 | `constants.py` | 경로, 정규식, 상수 집합 |
 | `models.py` | `KakaoPFPost`, `PostProcessResult`, `ImageFailedLog`, `PostSoupCache` 타입 별칭 |
@@ -19,8 +19,8 @@
 | `fallback_kakao.py` | Kakao PF 폴백 |
 | `collect.py` | `collect_image_urls`, `_detect_non_image_urls` |
 | `download.py` | `download_one_image`, `_determine_filename` |
-| `process.py` | `process_post`, reprocess, supplement, rename |
-| `runner.py` | `run_images`, fallback CSV 생성 |
+| `process.py` | `process_post`, `process_post_fallback` |
+| `runner.py` | `run_images`, `run_fallback_images`, fallback CSV 생성 |
 
 ## 경로 상수
 
@@ -38,6 +38,9 @@
 - `_NON_IMAGE_CONTEXT_KEYWORDS` — 비이미지 다운로드 링크 감지용 키워드 (bgm, ost 등)
 - `DONE_POSTS_FILE`: 이미지 수집 완료 포스트 URL+이미지 수 목록 (`URL\t이미지수`)
 - `FALLBACK_REPORT_FILE`: 폴백 성공 CSV 리포트 (`post_url, original_img_url, fallback_type, saved_path, source_url`)
+- `FALLBACK_IMAGES_DIR`: 폴백 보존 이미지 디렉토리 (`images_fallback/`)
+- `FALLBACK_DONE_FILE`, `FALLBACK_IMAGE_MAP_FILE`, `FALLBACK_IMG_HASH_FILE`: 폴백 전용 트래킹 파일
+- `FALLBACK_MULTILANG_LOG_FILE`, `FALLBACK_KAKAO_PF_LOG_FILE`: 폴백 전용 성공 로그
 
 ## 락 구조
 
@@ -69,10 +72,15 @@ class ImageFailedLog:
 | `_map_buf` | `image_map.tsv` | clean_url → 상대경로 |
 | `_img_hash_buf` | `image_hashes.tsv` | 해시 → 상대경로 |
 | `_done_posts_buf` | `done_posts_images.txt` | 포스트 완료 이력 |
-| `_multilang_log_buf` | `multilang_fallback.tsv` | 다국어 폴백 성공 로그 |
-| `_kakao_pf_log_buf` | `kakao_pf_log.tsv` | Kakao PF 폴백 성공 로그 |
+| `_multilang_log_buf` | `multilang_fallback.tsv` | 다국어 폴백 성공 로그 (레거시, 현재 미사용) |
+| `_kakao_pf_log_buf` | `kakao_pf_log.tsv` | Kakao PF 폴백 성공 로그 (레거시, 현재 미사용) |
+| `_fb_done_buf` | `fallback_downloaded_urls.txt` | 폴백 전용 URL 완료 이력 |
+| `_fb_map_buf` | `fallback_image_map.tsv` | 폴백 전용 clean_url → 상대경로 |
+| `_fb_img_hash_buf` | `fallback_image_hashes.tsv` | 폴백 전용 해시 → 상대경로 |
+| `_fb_multilang_log_buf` | `images_fallback/multilang_fallback.tsv` | 폴백 다국어 성공 로그 |
+| `_fb_kakao_pf_log_buf` | `images_fallback/kakao_pf_log.tsv` | 폴백 Kakao PF 성공 로그 |
 
-`run_images` 종료 시 모든 버퍼에 `flush_all()` 호출 필수.
+`run_images` / `run_fallback_images` 종료 시 해당 버퍼에 `flush_all()` 호출 필수.
 
 ---
 
@@ -106,19 +114,17 @@ Google Drive 링크 중 `/spreadsheets/`, `/forms/` 경로와 `_SKIP_LINK_HOSTS`
 | `linked_keyword` | 직접 + CT 검증 (아카이브 허용) | Wayback `im_` (아카이브 허용) | Wayback 포스트 스냅샷에서 `<a>` 탐색 (아카이브 허용) |
 | `linked_direct` | 직접 + CT 또는 확장자 (아카이브 허용) | community CDN에 한해 Wayback `im_` (아카이브 허용) | - |
 
-### 확장 폴백 (retry 모드 전용)
+### 확장 폴백 (`--retry-fallback` 전용)
 
-기본 3단계에서 실패 시 아래 순서로 추가 시도. `linked_direct` 타입은 제외.
-
-| 4단계 | 5단계 |
-|-------|-------|
-| **Kakao PF 폴백** | **다국어 Wayback 폴백** |
-
-둘 다 성공 시 **파일 크기가 큰 쪽**이 primary, 작은 쪽이 alternative로 로그에 기록.
+`--retry-fallback`에서만 실행. 기본 다운로드와 완전 분리된 별도 파이프라인.
+실패 이미지에 대해 Kakao PF + 다국어 Wayback을 **동시** 시도. `linked_direct` 타입은 제외.
+둘 다 성공 시 **파일 크기가 큰 쪽**이 primary, 작은 쪽이 alternative.
+이미지는 `images_fallback/{category}/{YYYY}/{MM}/`에 저장 (보존 목적).
+Primary 트래킹(`image_map.tsv`, `downloaded_urls.txt`, `failed_images.txt`)에 기록하지 않음 → MD/HTML 생성에 영향 없음.
 
 ---
 
-## Kakao PF 폴백 (retry 모드 전용)
+## Kakao PF 폴백 (`--retry-fallback` 전용)
 
 ### 상수
 
@@ -147,15 +153,15 @@ class KakaoPFPost(NamedTuple):
 
 ### 처리 흐름
 
-1. `run_images`에서 `retry_mode=True` 시 `_build_kakao_pf_index()` 호출
-2. 각 이미지의 `download_one_image`에서 기본 폴백 실패 후 `_fetch_kakao_pf_image()` 시도
+1. `run_fallback_images`에서 `_build_kakao_pf_index()` 호출
+2. `process_post_fallback`에서 `_fetch_kakao_pf_image()` 시도
 3. `published_time[:10]` 기반으로 같은 날짜의 Kakao PF 게시글 탐색 → 제목 유사도 매칭. published_time이 없으면 `post_date`(lastmod) 폴백
 4. 매칭된 포스트의 `media_urls`에서 이미지 인덱스로 대체 이미지 선택
-5. 성공 시 `_kakao_pf_log_buf`에 로그 기록
+5. 성공 시 `_fb_kakao_pf_log_buf`에 로그 기록
 
 ---
 
-## 다국어 Wayback 폴백 (retry 모드 전용)
+## 다국어 Wayback 폴백 (`--retry-fallback` 전용)
 
 ### 상수
 
@@ -186,13 +192,13 @@ class KakaoPFPost(NamedTuple):
 
 ### 처리 흐름
 
-1. `run_images`에서 `retry_mode=True` 시 EN/JA published_time + 카테고리 + lastmod 인덱스 구축
-2. 각 이미지의 `download_one_image`에서 기본 + Kakao PF 폴백 실패 후 시도
+1. `run_fallback_images`에서 EN/JA published_time + 카테고리 + lastmod 인덱스 구축
+2. `process_post_fallback`에서 Kakao PF와 동시에 `_fetch_multilang_wayback_image` 시도
 3. `_fetch_multilang_wayback_image` 내부 3단계:
    - **Phase A**: URL/파일명 기반 — 원본 이미지 URL의 언어별 변환 URL을 Wayback에서 직접 탐색
    - **Phase A-2**: 포스트 HTML에서 URL 매칭 — **전체 후보**(confirmed+unconfirmed) 순회. URL 매칭은 안전하므로
    - **Phase B**: Position 기반 — **confirmed만** 순회. 위치 기반은 오매칭 위험이 있으므로 시그널 일치 후보로 제한
-4. 성공 시 `_multilang_log_buf`에 로그 기록
+4. 성공 시 `_fb_multilang_log_buf`에 로그 기록
 
 ---
 
@@ -224,19 +230,31 @@ class KakaoPFPost(NamedTuple):
 def run_images(
     posts: list[tuple[str, str, str]],  # (url, lastmod, published_time)
     retry_mode: bool = False,
-    retry_multilang: bool = False,
-    retry_kakaopf: bool = False,
     force_download: bool = False,
     html_index: dict[str, Path] | None = None,
     max_workers: int = DEFAULT_MAX_WORKERS,
-    fallback_disabled: bool = False,
 ) -> None:
 ```
 
 - `force_download=True`: `done_post_urls` 빈 dict으로 초기화, `seen_urls` 빈 set으로 초기화.
 - `html_index`: `fetch_post_html(url, html_index)`를 통해 로컬 HTML 우선 조회.
-- `retry_mode=True`: 다국어 Wayback 폴백 + Kakao PF 폴백 자동 활성화 (`fallback_disabled` 미설정 시).
-- `fallback_disabled=True`: `retry_mode=True`여도 multilang/kakao 인덱스를 구축하지 않음. 원본 + 원본 Wayback만으로 재시도. `--reprocess-fallbacks`에서 사용.
+- `retry_mode=True`: 원본 + KO Wayback만 시도. multilang/kakao 폴백은 `--retry-fallback`으로 분리됨.
+
+## run_fallback_images 시그니처
+
+```python
+def run_fallback_images(
+    posts: list[tuple[str, str, str]],  # (url, lastmod, published_time)
+    html_index: dict[str, Path] | None = None,
+    max_workers: int = DEFAULT_MAX_WORKERS,
+) -> None:
+```
+
+- `failed_images.txt` 기반으로 대상 필터링.
+- multilang + kakao 인덱스 구축 후 `process_post_fallback()` 병렬 실행.
+- `images_fallback/`에 저장, 폴백 전용 트래킹 파일 사용.
+- `failed_images.txt`는 건드리지 않음 (원본 실패 상태 유지).
+- 재실행 시 `FALLBACK_DONE_FILE`로 중복 방지.
 
 ---
 
@@ -250,14 +268,16 @@ def run_images(
 
 | 항목 | 계산식 | 의미 |
 |------|--------|------|
-| **저장** (`total_saved`) | `"original"` + `"multilang"` + `"kakao"` 반환 건수 | 디스크에 새 파일을 저장한 건수 |
+| **저장** (`total_saved`) | `"original"` 반환 건수 | 디스크에 새 파일을 저장한 건수 |
 | **중복** (`total_dedup`) | `"dup"` 반환 건수 | URL은 다르지만 SHA-256 해시가 동일하여 저장을 생략한 건수 |
 | **기존** (`existing`) | `total_ok - total_saved - total_dedup` | `seen_urls` 히트 (`"already"` 반환). 이미 처리된 URL의 재등장 |
 | **실패** (`total_fail`) | `""` 반환 건수 | 다운로드 실패 |
 
-retry 모드에서는 저장 내역이 원본/multilang/kakao로 세분화:
+retry 모드도 동일 포맷 (multilang/kakao 폴백이 분리되어 더 이상 세분화 없음).
+
+`--retry-fallback` 모드의 로그:
 ```
-저장=3 (원본=1 multilang=1 kakao=1) 중복=0 기존=29 실패=16
+저장=3 (multilang=2 kakao=1)
 ```
 
 ### `download_one_image` 반환값
@@ -267,8 +287,6 @@ retry 모드에서는 저장 내역이 원본/multilang/kakao로 세분화:
 | `"already"` | `seen_urls`에 이미 존재 (같은 URL 중복) | ok (기존) |
 | `"dup"` | 해시 중복 — 다른 URL이지만 동일 콘텐츠 | ok (중복) |
 | `"original"` | 원본/KO Wayback으로 새로 저장 | ok (저장) |
-| `"multilang"` | 다국어 Wayback 폴백으로 새로 저장 | ok (저장) |
-| `"kakao"` | Kakao PF 폴백으로 새로 저장 | ok (저장) |
 | `""` | 실패 | fail |
 
 ### 최초 실행에서 "중복"과 "기존"이 발생하는 이유
@@ -284,32 +302,6 @@ retry 모드에서는 저장 내역이 원본/multilang/kakao로 세분화:
 4. 포스트의 모든 이미지가 ok(fail=0)이면 `done_post_urls`에 추가
 5. 다음 `--retry` 실행 시 `failed_images.txt`에 남은 항목만 대상
 6. **저장=0이어도** `"already"`로 처리된 이미지들이 failed 엔트리에서 제거되므로 대상 포스트 수가 줄어듦
-
----
-
-## 폴백 재처리 (`--reprocess-fallbacks`)
-
-기존 multilang/kakao 폴백으로 저장된 이미지를 원본 소스로 교체 시도.
-
-### 처리 흐름
-
-1. `_reprocess_fallbacks_cleanup()` 호출:
-   - `multilang_fallback.tsv`, `kakao_pf_log.tsv` 읽기
-   - 각 항목의 트래킹 제거 (`downloaded_urls.txt`, `image_hashes.tsv`, `image_map.tsv`, `done_posts_images.txt`)
-   - `failed_images.txt`에 원본 이미지 URL 추가
-   - 폴백 로그 클리어
-2. `run_images(retry_mode=True, fallback_disabled=True)` 실행:
-   - 원본 + 원본 Wayback만 시도 (multilang/kakao 인덱스 미구축)
-   - 원본 성공 → 원본 이미지로 교체
-   - 원본 실패 → `failed_images.txt`에 남음
-3. 사용자가 이후 `--retry`로 (수정된) 폴백 재시도 가능
-
-### 유틸리티 함수
-
-| 함수 | 설명 |
-|------|------|
-| `_filter_file(filepath, keep)` | 파일의 각 줄에 대해 `keep(line)=True`인 줄만 남기고 재작성. 제거된 줄 수 반환 |
-| `_reprocess_fallbacks_cleanup()` | 폴백 로그 기반 트래킹 정리. 처리된 항목 수 반환 |
 
 ---
 

@@ -9,6 +9,11 @@ from .constants import (
     DONE_FILE,
     DONE_POSTS_FILE,
     FAILED_FILE,
+    FALLBACK_DONE_FILE,
+    FALLBACK_IMAGE_MAP_FILE,
+    FALLBACK_IMG_HASH_FILE,
+    FALLBACK_KAKAO_PF_LOG_FILE,
+    FALLBACK_MULTILANG_LOG_FILE,
     IMAGE_MAP_FILE,
     IMG_HASH_FILE,
     KAKAO_PF_LOG_FILE,
@@ -53,3 +58,13 @@ _wayback_cache_lock = threading.Lock()
 # ---------------------------------------------------------------------------
 
 _failed_log = ImageFailedLog(FAILED_FILE, _dl_lock)
+
+# ---------------------------------------------------------------------------
+# Fallback 전용 LineBuffer (--retry-fallback, primary 트래킹과 분리)
+# ---------------------------------------------------------------------------
+
+_fb_done_buf = LineBuffer(FALLBACK_DONE_FILE)
+_fb_map_buf = LineBuffer(FALLBACK_IMAGE_MAP_FILE)
+_fb_img_hash_buf = LineBuffer(FALLBACK_IMG_HASH_FILE)
+_fb_multilang_log_buf = LineBuffer(FALLBACK_MULTILANG_LOG_FILE)
+_fb_kakao_pf_log_buf = LineBuffer(FALLBACK_KAKAO_PF_LOG_FILE)

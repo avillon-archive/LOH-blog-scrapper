@@ -18,7 +18,8 @@
 | 옵션 | 설명 |
 |------|------|
 | `--images` / `--md` / `--html` | 해당 단계만 실행. 미지정 시 전체 실행. (html은 항상 포함) |
-| `--retry` | 실패 목록 재처리. `--sample`과 조합 가능. |
+| `--retry` | 실패 목록 재처리 (원본/Wayback만). `--sample`과 조합 가능. |
+| `--retry-fallback` | 실패 이미지에 multilang/kakao 폴백 시도. `images_fallback/`에 보존용으로 저장. primary 트래킹 미수정. |
 | `--posts` | `all_posts.txt`를 소스로 사용. 해당 사이트맵 개별 갱신 체크. |
 | `--pages` | `all_pages.txt`를 소스로 사용. 해당 사이트맵 개별 갱신 체크. |
 | `--custom` | `custom_posts.txt`를 소스로 사용. 사이트맵 갱신 건너뜀. |
@@ -97,7 +98,10 @@ for step in selected_order:
         for lang, cfg in MULTILANG_CONFIGS.items():
             html_index.update(build_html_index(cfg["html_dir"], cfg["done_html"]))
     elif step == "images":
-        run_images(posts, ...)
+        if args.retry_fallback:
+            run_fallback_images(posts, ...)
+        else:
+            run_images(posts, ...)
     elif step == "md":
         run_md(posts, ...)
 ```

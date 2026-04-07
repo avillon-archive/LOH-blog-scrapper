@@ -49,7 +49,7 @@ from build_posts_list import (
     SITEMAP_URL,
     SITEMAP_PAGES_URL,
 )
-from download_images import run_images, _reprocess_fallbacks_cleanup
+from download_images import run_images, run_fallback_images
 from download_md import run_md
 from download_html import run_html
 from download_html_local import run_html_local
@@ -235,13 +235,9 @@ def main():
     parser.add_argument("--md", action="store_true", help="MD만 처리")
     parser.add_argument("--html", action="store_true", help="HTML만 처리")
     parser.add_argument("--html-local", action="store_true", help="오프라인 열람용 HTML 생성")
-    parser.add_argument("--retry", action="store_true", help="실패 목록 재처리")
-    parser.add_argument("--retry-multilang", action="store_true",
-                        help="KakaoPF 성공 이미지에 multilang alt 보충")
-    parser.add_argument("--retry-kakaopf", action="store_true",
-                        help="multilang 성공 이미지에 KakaoPF alt 보충")
-    parser.add_argument("--reprocess-fallbacks", action="store_true",
-                        help="원본 재시도: 기존 multilang/kakao 폴백 이미지를 원본으로 교체 시도")
+    parser.add_argument("--retry", action="store_true", help="실패 목록 재처리 (원본/Wayback만)")
+    parser.add_argument("--retry-fallback", action="store_true",
+                        help="실패 이미지에 multilang/kakao 폴백 시도 (별도 디렉토리에 보존)")
     parser.add_argument(
         "--posts",
         action="store_true",
@@ -276,7 +272,7 @@ def main():
 
     # ── 파이프라인 단계 결정 ────────────────────────────────────────────
     # --retry / --reprocess-fallbacks 는 이미지 전용이므로 images 단계만 선택
-    images_only_flags = args.retry or args.reprocess_fallbacks
+    images_only_flags = args.retry or args.retry_fallback
     html_local_flag = getattr(args, "html_local", False)
     user_selected = {
         name
@@ -431,15 +427,11 @@ def main():
         elif step == "images":
             print("▶ 이미지 다운로드 시작")
             print("━" * 60)
-            if args.reprocess_fallbacks:
-                cleaned = _reprocess_fallbacks_cleanup()
-                if cleaned:
-                    run_images(posts, retry_mode=True, fallback_disabled=True,
-                               html_index=html_index, max_workers=max_workers)
+            if args.retry_fallback:
+                run_fallback_images(posts, html_index=html_index,
+                                    max_workers=max_workers)
             else:
                 run_images(posts, retry_mode=args.retry,
-                           retry_multilang=args.retry_multilang,
-                           retry_kakaopf=args.retry_kakaopf,
                            force_download=force_download,
                            html_index=html_index, max_workers=max_workers)
         elif step == "md":
