@@ -160,6 +160,18 @@ def load_failed_post_urls(filepath: Path) -> set[str]:
     return failed
 
 
+def load_stale(filepath: Path) -> dict[str, set[str]]:
+    """stale 파일을 로드. {post_url: set[clean_url]}."""
+    result: dict[str, set[str]] = {}
+    if not filepath.exists():
+        return result
+    for line in filepath.read_text(encoding="utf-8").splitlines():
+        parts = line.strip().split("\t", 1)
+        if len(parts) == 2 and parts[0]:
+            result[parts[0]] = set(parts[1].split("|"))
+    return result
+
+
 def get_session() -> requests.Session:
     """Return a thread-local requests.Session."""
     session = getattr(_session_local, "session", None)

@@ -10,5 +10,4 @@ __pycache__/
 *.note
 *.txt
 !requirements.txt
-FALLBACK_ANALYSIS.md
-fallback_analysis.md
+backfill_stale.py

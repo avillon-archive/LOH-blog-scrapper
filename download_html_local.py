@@ -20,6 +20,7 @@ from utils import (
     DEFAULT_MAX_WORKERS,
     ROOT_DIR,
     FailedLog,
+    LineBuffer,
     build_html_index,
     clean_url,
     ensure_utf8_console,
@@ -27,6 +28,7 @@ from utils import (
     fetch_with_retry,
     load_done_file,
     load_image_map,
+    load_stale,
     run_pipeline,
 )
 
@@ -36,6 +38,7 @@ ASSETS_DIR = HTML_LOCAL_DIR / "assets"
 IMAGE_MAP_FILE = ROOT_DIR / "image_map.tsv"
 DONE_FILE = ROOT_DIR / "done_html_local.txt"
 FAILED_FILE = ROOT_DIR / "failed_html_local.txt"
+STALE_FILE = ROOT_DIR / "stale_html_local.txt"
 
 # CSS url(...) 참조 패턴
 CSS_URL_RE = re.compile(r"""url\(\s*['"]?([^'")]+)['"]?\s*\)""")
@@ -246,6 +249,7 @@ class HtmlLocalizer:
         self._site_img = site_image_downloader
         self._prefix = _img_prefix(category)
         self._assets_prefix = _assets_prefix(category)
+        self.unmapped_urls: set[str] = set()
 
     def localize(self) -> str:
         """모든 변환을 적용하고 HTML 문자열을 반환."""
@@ -273,10 +277,15 @@ class HtmlLocalizer:
 
     def _rewrite_img(self, src: str) -> tuple[str, bool]:
         """_rewrite_img_src 호출을 간소화하는 내부 헬퍼."""
-        return _rewrite_img_src(
+        new_src, mapped = _rewrite_img_src(
             src, self._post_url, self._image_map, self._prefix,
             self._site_img, self._assets_prefix,
         )
+        if not mapped and src and not src.startswith("data:"):
+            abs_src = urllib.parse.urljoin(self._post_url, src)
+            if abs_src.startswith("http"):
+                self.unmapped_urls.add(clean_url(abs_src))
+        return new_src, mapped
 
     def _rewrite_images(self) -> None:
         """<img> 태그의 src/srcset/data-src 를 로컬 경로로 리라이트."""
@@ -658,6 +667,7 @@ def _process_post(
     html_local_dir: Path,
     failed_log: FailedLog,
     site_image_downloader: SiteImageDownloader | None = None,
+    stale_buf: "LineBuffer | None" = None,
 ) -> bool:
     try:
         html_text = html_path.read_text(encoding="utf-8")
@@ -675,6 +685,9 @@ def _process_post(
         site_image_downloader,
     )
     output = localizer.localize()
+
+    if stale_buf and localizer.unmapped_urls:
+        stale_buf.add(f"{post_url}\t{'|'.join(localizer.unmapped_urls)}")
 
     # 블로그 홈페이지는 index.html 로 저장
     if post_url.rstrip("/") == _BLOG_BASE:
@@ -727,15 +740,37 @@ def run_html_local(
     done_slugs = load_done_file(done_file)
     done_urls: set[str] = set() if force_download else set(done_slugs.values())
 
+    # ── stale 로드 + refresh 판정 ──────────────────────────────────────
+    stale = load_stale(STALE_FILE)
+    refresh_urls: set[str] = set()
+    if not force_download:
+        image_map_keys = image_map.keys()
+        for url, unmapped in stale.items():
+            if unmapped & image_map_keys:
+                refresh_urls.add(url)
+    if refresh_urls:
+        done_urls -= refresh_urls
+        for s in [s for s, u in done_slugs.items() if u in refresh_urls]:
+            del done_slugs[s]
+        print(f"[HTML-LOCAL] image_map 갱신으로 {len(refresh_urls)}개 포스트 재생성")
+
+    # ── stale 파일 재작성 ──────────────────────────────────────────────
+    STALE_FILE.write_text("", encoding="utf-8")
+    stale_buf = LineBuffer(STALE_FILE, flush_every=50)
+    for url, unmapped in stale.items():
+        if url not in refresh_urls:
+            stale_buf.add(f"{url}\t{'|'.join(unmapped)}")
+
     # run_pipeline 용 (url, date) 형식으로 변환
     # html_path 를 전달하기 위해 path→url 매핑 유지
     url_to_path: dict[str, Path] = {url: path for path, url in source}
     posts = [(url, "") for _, url in source]
 
-    if not retry_mode:
+    if not retry_mode and not refresh_urls:
         pending = sum(1 for url, _ in posts if url not in done_urls)
         if pending == 0:
             print(f"[HTML-LOCAL] {len(posts)}개 포스트 모두 처리 완료, 건너뜀")
+            stale_buf.flush_all()
             generate_listing_pages(image_map, slug_map, html_local_dir)
             return
 
@@ -756,6 +791,7 @@ def run_html_local(
             html_path, url, image_map, slug_map,
             css_downloader, html_local_dir, failed_log,
             site_img_downloader,
+            stale_buf=stale_buf,
         )
         if success:
             slug = html_path.stem
@@ -774,6 +810,7 @@ def run_html_local(
         label="HTML-LOCAL",
         max_workers=max_workers,
     )
+    stale_buf.flush_all()
 
     # 카테고리 목록 페이지 생성
     generate_listing_pages(image_map, slug_map, html_local_dir)

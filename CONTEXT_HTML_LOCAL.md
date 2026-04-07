@@ -1,140 +1,57 @@
 # download_html_local.py
 
-## 목적
+블로그 운영 중단 대비, 다운로드된 KO HTML을 오프라인 열람 가능하도록 후처리. 원본 `html/`은 보존하고 `html_local/`에 별도 저장. KO 전용.
 
-블로그 운영 중단 대비, 다운로드된 KO HTML을 오프라인 열람 가능하도록 후처리. 원본 `html/`은 보존하고 `html_local/`에 별도 저장.
-
-## 경로 상수
-
-- `HTML_DIR`: `loh_blog/html/` (소스)
-- `HTML_LOCAL_DIR`: `loh_blog/html_local/` (출력)
-- `ASSETS_DIR`: `loh_blog/html_local/assets/` (CSS 등 공용 에셋)
-- `IMAGE_MAP_FILE`: `loh_blog/image_map.tsv`
-- `DONE_FILE`: `loh_blog/done_html_local.txt`
-- `FAILED_FILE`: `loh_blog/failed_html_local.txt`
+---
 
 ## 아키텍처
 
 ### CssDownloader
 
-CSS 다운로드·캐싱 담당 클래스. `run_html_local`에서 1회 생성, 모든 스레드가 공유.
+CSS 다운로드·캐싱. `run_html_local`에서 1회 생성, 모든 스레드가 공유.
 
 - **per-URL 락**: 같은 URL의 동시 다운로드 방지 (전역 락이 아니라 URL별 Lock).
-- **파일명 해시**: `{stem}_{md5[:8]}.{ext}` 형식으로 다른 경로의 동명 CSS 충돌 방지.
+- **파일명 해시**: `{stem}_{md5[:8]}.{ext}` 형식으로 동명 CSS 충돌 방지.
 - CSS 내 `url()` 상대경로는 절대 URL로 정규화.
 
 ### SiteImageDownloader
 
-블로그 사이트 크롬 이미지(favicon, 네비 로고, GM 프로필 아바타 등)를 `assets/`에 다운로드. `CssDownloader`와 동일한 per-URL 락 + 해시 파일명 패턴.
-
-- 대상: `blog-ko.lordofheroes.com/content/images/` 접두사 URL만 처리.
-- `image_map.tsv`에 없는 블로그 도메인 이미지를 `assets/`로 로컬화.
-- `_rewrite_img_src()`에서 image_map 미스 시 폴백으로 호출됨.
+블로그 사이트 크롬 이미지(favicon, 네비 로고, GM 아바타 등)를 `assets/`에 다운로드. CssDownloader와 동일 per-URL 락 + 해시 파일명 패턴. `image_map.tsv`에 없는 블로그 도메인 이미지만 대상.
 
 ### HtmlLocalizer
 
-BeautifulSoup 기반 HTML 변환 클래스. 포스트 1건당 인스턴스 생성.
+포스트 1건당 인스턴스 생성. `localize()` 변환 순서:
 
-`localize()` 호출 시 아래 순서로 변환 적용 후 HTML 문자열 반환:
+1. **CSS 로컬화**: `<link rel="stylesheet">` → CssDownloader 로컬 경로
+2. **이미지 리라이트**: `image_map.tsv` 기반. 매핑 실패 시 SiteImageDownloader 폴백 또는 절대 URL. `srcset`·`data-src` 제거. `<style>` bg-image, `<meta og:image>`, JSON-LD도 처리.
+3. **내부 링크 로컬화**: `slug_map` 기반 파일 간 상대경로. `/tag/{slug}/` → `{category}/index.html`. 블로그 루트 → `index.html`.
+4. **홈 로고 리라이트**: `<a class="site-nav-logo">` → `index.html`
+5. **JS 제거**: 모든 `<script>` 제거, `<noscript>` 유지.
 
-1. **CSS 로컬화** (`_localize_css`): `<link rel="stylesheet">` href를 `CssDownloader`로 다운로드한 로컬 경로로 교체.
-2. **이미지 리라이트** (`_rewrite_images`, `_rewrite_meta_images`, `_rewrite_style_bg_images`): `image_map.tsv` 기반. `clean_url()`로 키 생성 후 매핑 조회.
-   - **매핑 성공**: `src`를 로컬 상대경로로 교체, `srcset`·`data-src` 제거.
-   - **매핑 실패**: 절대 URL로 정규화.
-   - `<style>` 블록·인라인 `style`의 `background-image: url(...)`, `<meta og:image>`, `<link rel="icon">`, JSON-LD 내 이미지도 처리.
-3. **내부 링크 로컬화** (`_rewrite_internal_links`): `slug_map` 기반. 블로그 내부 `<a href>`를 파일 간 상대경로로 리라이트. `author/`, `rss/` 등은 `_EXCLUDED_PATHS`로 건너뜀.
-   - `/tag/{slug}/` 링크는 `TAG_SLUG_TO_CATEGORY` 매핑으로 `{category}/index.html` 목록 페이지로 리라이트.
-   - 블로그 루트 경로(`/`, `https://blog-ko.lordofheroes.com`)는 `index.html`로 리라이트.
-4. **홈 로고 리라이트** (`_rewrite_home_logo`): `<a class="site-nav-logo">` 링크를 로컬 `index.html`로 변환.
-5. **JS 제거** (`_remove_scripts`): 모든 `<script>` 태그 제거. `<noscript>` 유지.
-
-### _process_post
-
-`HtmlLocalizer`를 사용하는 단일 포스트 처리 함수. HTML 읽기 → 카테고리 결정 → `localizer.localize()` → 파일 저장. done 추적은 `process_fn` 클로저가 담당. 블로그 홈페이지 URL은 `index.html`로 저장.
+---
 
 ## 상대경로 산출
 
-이미지:
-- `html_local/{slug}.html` → `../images/...`
-- `html_local/{category}/{slug}.html` → `../../images/...`
+| 소스 위치 | images | assets | 타 카테고리 |
+|-----------|--------|--------|-------------|
+| `html_local/{slug}.html` | `../images/...` | `assets/...` | `{category}/B.html` |
+| `html_local/{category}/{slug}.html` | `../../images/...` | `../assets/...` | `../{category}/B.html` |
 
-에셋:
-- `html_local/{slug}.html` → `assets/...`
-- `html_local/{category}/{slug}.html` → `../assets/...`
-
-내부 링크:
-- `html_local/{category}/A.html` → `../{other_category}/B.html`
-- `html_local/A.html` → `{category}/B.html`
-
-## 락 구조
-
-- `done_lock`: `process_fn` 클로저에서 done_slugs/done_urls/done_file 갱신 보호.
-- `CssDownloader._lock` + `_url_locks`: per-URL 락으로 CSS 다운로드 경합 방지.
-- `SiteImageDownloader._lock` + `_url_locks`: per-URL 락으로 사이트 크롬 이미지 다운로드 경합 방지.
-
-## utils.py 재사용
-
-- `load_done_file()`: done_html_local.txt 파싱.
-- `build_html_index()`: done_html.txt + html/ 디렉토리에서 소스 목록 구축.
-
-## run_html_local 시그니처
-
-```python
-def run_html_local(
-    retry_mode: bool = False,
-    force_download: bool = False,
-    max_workers: int = DEFAULT_MAX_WORKERS,
-    html_dir: Path = HTML_DIR,
-    html_local_dir: Path = HTML_LOCAL_DIR,
-    done_html_file: Path = ROOT_DIR / "done_html.txt",
-    done_file: Path = DONE_FILE,
-    failed_file: Path = FAILED_FILE,
-) -> None:
-```
-
-- `force_download=True`: `done_urls` 빈 set으로 초기화하여 전체 재생성.
-- KO 전용. EN/JA는 대상 아님.
-- 파이프라인 완료 후 `generate_listing_pages()` 자동 호출.
+---
 
 ## 카테고리 목록 페이지
 
-### TAG_SLUG_TO_CATEGORY
+`TAG_SLUG_TO_CATEGORY`: notices→공지사항, events→이벤트, gallery→갤러리, universe→유니버스, library→아발론서고, coupon→쿠폰.
 
-블로그 태그 URL slug → 로컬 카테고리 디렉토리명 매핑:
+`generate_listing_pages()` — `run_html_local()` 끝에서 자동 호출:
 
-| Tag slug | 카테고리 |
-|----------|---------|
-| notices | 공지사항 |
-| events | 이벤트 |
-| gallery | 갤러리 |
-| universe | 유니버스 |
-| library | 아발론서고 |
-| coupon | 쿠폰 |
+1. `html/` 전체에서 메타데이터 1회 수집 → 카테고리별 분류.
+2. 각 태그 페이지의 **1페이지만** fetch → 레이아웃 템플릿 (캐시: `listing_cache/`).
+3. 로컬 메타데이터로 post-card HTML 생성 → published_time 내림차순.
+4. HtmlLocalizer 적용 후 `html_local/{category}/index.html` 저장.
 
-### generate_listing_pages
+### stale 추적
 
-`run_html_local()` 끝에서 호출. 로컬 HTML 메타데이터 기반으로 목록 페이지 생성.
+`stale_html_local.txt` — MD와 동일 패턴. `HtmlLocalizer`가 unmapped URL을 수집, `run_html_local` 실행 시 자동 refresh 판정.
 
-**동작 방식**:
-1. 로컬 `html/` 전체에서 메타데이터 1회 수집 (`_collect_all_post_meta`) → 카테고리별 분류
-2. 각 태그 페이지(`/tag/{slug}/`)의 **1페이지만** fetch → 레이아웃 템플릿으로 사용 (캐시: `listing_cache/`)
-3. 로컬 메타데이터에서 post-card HTML 직접 생성 (`_build_post_card`) → published_time 내림차순
-4. `HtmlLocalizer` 적용 (이미지·CSS·링크 로컬화, JS 제거)
-5. `html_local/{category}/index.html`로 저장
-
-**메타데이터 추출** (`_extract_post_meta`): og:title, og:description, og:image, article:published_time, article:tag, author-profile-image (alt=이름, src=아바타)
-
-**템플릿 캐시**: `loh_blog/listing_cache/`에 페이지 1 HTML 캐시. 캐시 존재 시 네트워크 불필요.
-
-**홈페이지 (index_all)**: `_find_prob_linked_slugs()`로 확률 정보 카테고리에서 2단계 링크 체인으로 도달 가능한 페이지(영웅 소개·아티팩트 상세 ~71건)를 제외. 이들은 확률 정보 메뉴로 이미 접근 가능. 나머지(카테고리 있는 포스트 + 카테고리 없는 이벤트/콜라보/팬작품 등)는 전부 포함.
-
-**생성 파일**:
-- `html_local/{category}/index.html` (6개 카테고리)
-- `html_local/index_all.html` (전체 목록, 확률 정보 체인 제외)
-- `html_local/index.html` (`_process_post`에서 생성)
-
-## run_all.py 통합
-
-- `--html-local` 플래그로 단독 실행 가능.
-- `PIPELINE_ORDER`에 `"html-local"` 포함 (md 뒤). 인자 미지정 시 전체 파이프라인에 포함.
-- `--retry`, `--force` 지원.
+**홈페이지** (`index_all.html`): `_find_prob_linked_slugs()`로 확률 정보 카테고리에서 2단계 링크 체인으로 도달 가능한 페이지(~71건)를 제외 (확률 정보 메뉴로 이미 접근 가능). 나머지 전부 포함.
