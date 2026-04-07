@@ -9,7 +9,7 @@
 
 ## FailedLog
 
-`download_md.py` / `download_html.py` 공통 `(post_url, reason)` 2-tuple 실패 관리.
+`download_md.py` / `download_html.py` / `download_html_local.py` 공통 `(post_url, reason)` 2-tuple 실패 관리.
 
 **스레드 안전 패턴**: lock 내부에서 in-memory 캐시 갱신, lock 외부에서 파일 기록. `append_line` 내부 `_file_lock`이 원자성 보장.
 
