@@ -1,8 +1,30 @@
-# download_images.py
+# download_images/ 패키지
+
+2455줄 단일 파일을 15개 모듈로 분리한 패키지 구조.
+
+## 패키지 구조
+
+| 모듈 | 역할 |
+|------|------|
+| `__init__.py` | re-export: `run_images`, `_reprocess_fallbacks_cleanup`, `backfill_image_map` |
+| `__main__.py` | CLI (`python -m download_images`) |
+| `constants.py` | 경로, 정규식, 상수 집합 |
+| `models.py` | `KakaoPFPost`, `PostProcessResult`, `ImageFailedLog`, `PostSoupCache` 타입 별칭 |
+| `state.py` | 락, `LineBuffer`, Wayback 캐시, `_failed_log` 싱글턴 |
+| `hashing.py` | SHA-256 유틸, 해시 캐시 로드/빌드 |
+| `url_utils.py` | URL 정규화, 파일명 유틸 (순수 함수) |
+| `persistence.py` | `save_image`, seen/done/failed 파일 헬퍼, `backfill_image_map` |
+| `fetch.py` | Wayback CDX, 이미지 fetch, 포스트 soup 파싱 |
+| `fallback_multilang.py` | EN/JA 다국어 Wayback 폴백 |
+| `fallback_kakao.py` | Kakao PF 폴백 |
+| `collect.py` | `collect_image_urls`, `_detect_non_image_urls` |
+| `download.py` | `download_one_image`, `_determine_filename` |
+| `process.py` | `process_post`, reprocess, supplement, rename |
+| `runner.py` | `run_images`, fallback CSV 생성 |
 
 ## 경로 상수
 
-`ROOT_DIR`은 `utils.py`에서 import (`from utils import ROOT_DIR`).
+`ROOT_DIR`은 `utils.py`에서 import (`from utils import ROOT_DIR`). 모든 경로 상수는 `constants.py`에 정의.
 
 ## 주요 상수
 

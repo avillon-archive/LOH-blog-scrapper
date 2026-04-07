@@ -1,0 +1,321 @@
+# -*- coding: utf-8 -*-
+"""단일 이미지 다운로드 (download_one_image) 및 파일명 결정."""
+
+import hashlib
+import urllib.parse
+from pathlib import Path
+
+from bs4 import BeautifulSoup
+
+from utils import ROOT_DIR
+
+from .constants import DOWNLOADABLE_EXTS, KAKAO_PF_PROFILE
+from .fallback_kakao import _fetch_kakao_pf_image
+from .fallback_multilang import _fetch_multilang_wayback_image
+from .fetch import (
+    _fetch_image,
+    _fetch_wayback_gdrive_from_post,
+    _fetch_wayback_image,
+    _fetch_wayback_img_from_post,
+    _fetch_wayback_linked_from_post,
+    _filename_from_cd,
+)
+from .hashing import _sha256_bytes
+from .models import KakaoPFPost, PostSoupCache
+from .persistence import record_failed, save_image
+from .state import (
+    _done_buf,
+    _img_hash_buf,
+    _kakao_pf_log_buf,
+    _map_buf,
+    _multilang_log_buf,
+    _save_lock,
+    _state_lock,
+)
+from .url_utils import (
+    _basename,
+    _clean_img_url,
+    _ext_from_mime,
+    _is_community_cdn,
+    _safe_filename,
+    _seen_key,
+)
+
+
+# ---------------------------------------------------------------------------
+# 파일명 결정
+# ---------------------------------------------------------------------------
+
+
+def _determine_filename(
+    utype: str,
+    original_href: str,
+    final_url: str,
+    content_type: str,
+    cd_header: str,
+    idx: int,
+) -> str:
+    cd_name = _filename_from_cd(cd_header)
+
+    if utype in ("img", "og_image"):
+        final_base = _basename(final_url)
+        if final_base:
+            return final_base
+        original_base = _basename(original_href)
+        if original_base:
+            return original_base
+        return f"image_{idx}{_ext_from_mime(content_type)}"
+
+    if utype in ("linked_direct", "linked_keyword"):
+        if cd_name:
+            return cd_name
+        final_base = _basename(final_url)
+        if final_base and Path(final_base).suffix.lower() in DOWNLOADABLE_EXTS:
+            return final_base
+        original_base = _basename(original_href)
+        if original_base and Path(original_base).suffix.lower() in DOWNLOADABLE_EXTS:
+            return original_base
+        return f"image_{idx}{_ext_from_mime(content_type)}"
+
+    # gdrive
+    if cd_name:
+        return cd_name
+    parsed = urllib.parse.urlparse(original_href)
+    query = urllib.parse.parse_qs(parsed.query)
+    for key in ("name", "title"):
+        if key in query and query[key]:
+            return query[key][0]
+    digest = hashlib.md5(original_href.encode()).hexdigest()[:12]
+    return f"{digest}{_ext_from_mime(content_type)}"
+
+
+# ---------------------------------------------------------------------------
+# 출처 태그 / alternative 저장
+# ---------------------------------------------------------------------------
+
+
+def _source_tag(source_url: str) -> str:
+    """폴백 소스 URL로부터 출처 접두사를 결정한다."""
+    if source_url.startswith("http://pf.kakao.com/"):
+        return "[Kakao]"
+    if "blog-en" in source_url:
+        return "[EN]"
+    if "blog-ja" in source_url:
+        return "[JA]"
+    return ""
+
+
+def _save_alternative_image(
+    content: bytes,
+    filename: str,
+    folder: Path,
+    source_tag: str = "",
+) -> str | None:
+    """alternative 이미지를 primary와 같은 폴더에 저장하고 상대 경로를 반환한다."""
+    folder.mkdir(parents=True, exist_ok=True)
+    if source_tag:
+        stem = Path(filename).stem
+        suffix = Path(filename).suffix
+        filename = f"{source_tag} {stem}{suffix}"
+    safe_name = _safe_filename(filename)
+    with _save_lock:
+        saved = save_image(content, safe_name, folder)
+    return (folder / saved).relative_to(ROOT_DIR).as_posix()
+
+
+# ---------------------------------------------------------------------------
+# download_one_image
+# ---------------------------------------------------------------------------
+
+
+def download_one_image(
+    img_url: str,
+    utype: str,
+    post_url: str,
+    folder: Path,
+    idx: int,
+    seen_urls: set[str],
+    img_hashes: dict[str, str],
+    image_map: dict[str, str],
+    thumb_hashes: set[str],
+    post_soup_cache: PostSoupCache = None,
+    *,
+    post_date: str = "",
+    blog_title: str = "",
+    retry_mode: bool = False,
+    multilang_date_index: dict[str, list[tuple[str, str]]] | None = None,
+    kakao_pf_index: dict[str, list[KakaoPFPost]] | None = None,
+) -> str:
+    """이미지 1건 다운로드. 성공 방식을 나타내는 문자열을 반환한다.
+
+    Returns:
+        "already"  — 이미 다운로드됨
+        "original" — 원본/KO Wayback으로 성공
+        "multilang"— 다국어 Wayback 폴백 성공
+        "kakao"    — KakaoPF 폴백 성공
+        "dup"      — 해시 중복 (저장 생략)
+        ""         — 실패
+    """
+    seen_key = _seen_key(utype, img_url)
+
+    if seen_key in seen_urls:
+        return "already"
+
+    # ── 다운로드 단계 (잠금 외부 – 네트워크 I/O) ──────────────────────────
+    payload: tuple[bytes, str, str, str] | None = None
+
+    if utype in ("img", "og_image"):
+        payload = _fetch_image(img_url)
+        if payload is None:
+            payload = _fetch_wayback_image(img_url)
+        if payload is None:
+            payload = _fetch_wayback_img_from_post(post_url, img_url, post_soup_cache)
+
+    elif utype == "gdrive":
+        payload = _fetch_image(img_url, min_bytes=500)
+        if payload is None:
+            payload = _fetch_wayback_image(img_url, min_bytes=1)
+        if payload is None:
+            payload = _fetch_wayback_gdrive_from_post(post_url, img_url, post_soup_cache)
+
+    elif utype == "linked_keyword":
+        payload = _fetch_image(img_url, allow_archive=True)
+        if payload is None:
+            payload = _fetch_wayback_image(img_url, allow_archive=True)
+        if payload is None:
+            payload = _fetch_wayback_linked_from_post(post_url, img_url, post_soup_cache,
+                                                     allow_archive=True)
+
+    elif utype == "linked_direct":
+        payload = _fetch_image(img_url, allow_ext_fallback=True, allow_archive=True)
+        if payload is None and _is_community_cdn(img_url):
+            payload = _fetch_wayback_image(img_url, allow_ext_fallback=True, allow_archive=True)
+
+    # ── Kakao PF 폴백 (retry 모드 전용) ──────────────────────────────────
+    kakao_pf_result: tuple[bytes, str, str, str, str] | None = None
+    if payload is None and retry_mode and kakao_pf_index and utype != "linked_direct":
+        kakao_pf_result = _fetch_kakao_pf_image(
+            post_url, img_url, post_date, utype, idx,
+            kakao_pf_index, blog_title=blog_title,
+        )
+
+    # ── 다국어 Wayback 폴백 (retry 모드 전용) ────────────────────────────
+    multilang_result: tuple[bytes, str, str, str, str] | None = None
+    if payload is None and retry_mode and multilang_date_index and utype != "linked_direct":
+        multilang_result = _fetch_multilang_wayback_image(
+            post_url, img_url, post_date, utype, idx,
+            multilang_date_index, post_soup_cache,
+        )
+
+    # ── 폴백 결과 선택 ────────────────────────────────────────────────────
+    primary_source: str | None = None
+    alt_result: tuple[bytes, str, str, str, str] | None = None
+    alt_source: str | None = None
+
+    if payload is None and kakao_pf_result and multilang_result:
+        kp_size = len(kakao_pf_result[0])
+        ml_size = len(multilang_result[0])
+        if kp_size >= ml_size:
+            payload = kakao_pf_result[:4]
+            primary_source = kakao_pf_result[4]
+            alt_result = multilang_result
+            alt_source = multilang_result[4]
+        else:
+            payload = multilang_result[:4]
+            primary_source = multilang_result[4]
+            alt_result = kakao_pf_result
+            alt_source = kakao_pf_result[4]
+    elif payload is None and kakao_pf_result:
+        payload = kakao_pf_result[:4]
+        primary_source = kakao_pf_result[4]
+    elif payload is None and multilang_result:
+        payload = multilang_result[:4]
+        primary_source = multilang_result[4]
+
+    if payload is None:
+        record_failed(post_url, img_url, "download_failed")
+        return ""
+
+    content, final_url, content_type, content_disposition = payload
+    filename = _determine_filename(
+        utype, img_url, final_url, content_type, content_disposition, idx
+    )
+    if primary_source is not None:
+        tag = _source_tag(primary_source)
+        if tag:
+            stem = Path(filename).stem
+            suffix = Path(filename).suffix
+            filename = f"{tag} {stem}{suffix}"
+    safe_name = _safe_filename(filename)
+
+    # ── Phase 1: in-memory 상태 예약 (_state_lock, 극히 빠름) ────────────
+    should_save = False
+    img_key: str | None = None
+    content_hash = _sha256_bytes(content)
+
+    with _state_lock:
+        if seen_key in seen_urls:
+            return "already"
+
+        existing_rel = img_hashes.get(content_hash)
+        if existing_rel is not None:
+            seen_urls.add(seen_key)
+            img_key = _clean_img_url(img_url)
+            if img_key not in image_map:
+                image_map[img_key] = existing_rel
+                _map_buf.add(f"{img_key}\t{existing_rel}")
+            should_save = False
+        else:
+            seen_urls.add(seen_key)
+            img_key = _clean_img_url(img_url)
+            if utype == "og_image":
+                thumb_hashes.add(content_hash)
+            should_save = True
+
+    # ── Phase 2: 파일 저장 (_save_lock, _state_lock 해제 후) ────────────
+    if should_save:
+        with _save_lock:
+            saved_name = save_image(content, safe_name, folder)
+        rel = (folder / saved_name).relative_to(ROOT_DIR).as_posix()
+        is_thumb = utype == "og_image"
+        with _state_lock:
+            img_hashes[content_hash] = rel
+            if img_key not in image_map:  # type: ignore[operator]
+                image_map[img_key] = rel   # type: ignore[index]
+                _map_buf.add(f"{img_key}\t{rel}")
+        _img_hash_buf.add(f"{content_hash}\t{rel}\t{'T' if is_thumb else ''}")
+
+    _done_buf.add(seen_key)
+    primary_rel = rel if should_save else existing_rel  # type: ignore[possibly-undefined]
+
+    # ── Alternative 이미지 저장 ───────────────────────────────────────────
+    if alt_result is not None:
+        alt_content = alt_result[0]
+        alt_hash = _sha256_bytes(alt_content)
+        if alt_hash != content_hash:
+            alt_filename = _determine_filename(
+                utype, img_url, alt_result[1], alt_result[2], alt_result[3], idx
+            )
+            alt_tag = _source_tag(alt_source) if alt_source else ""
+            alt_rel = _save_alternative_image(alt_content, alt_filename, folder,
+                                              source_tag=alt_tag)
+            if alt_rel and alt_source:
+                if alt_source.startswith("http://pf.kakao.com/"):
+                    _kakao_pf_log_buf.add(f"{alt_rel}\t{post_url}\t{alt_source}\t{img_url}")
+                else:
+                    _multilang_log_buf.add(f"{alt_rel}\t{post_url}\t{alt_source}\t{img_url}")
+
+    # ── 폴백 성공 로그 기록 ───────────────────────────────────────────────
+    if primary_source is not None and primary_rel:
+        if kakao_pf_result and primary_source == kakao_pf_result[4]:
+            _kakao_pf_log_buf.add(f"{primary_rel}\t{post_url}\t{primary_source}\t{img_url}")
+        elif multilang_result and primary_source == multilang_result[4]:
+            _multilang_log_buf.add(f"{primary_rel}\t{post_url}\t{primary_source}\t{img_url}")
+
+    if not should_save:
+        return "dup"
+    if primary_source is None:
+        return "original"
+    if primary_source.startswith("http://pf.kakao.com/"):
+        return "kakao"
+    return "multilang"
