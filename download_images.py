@@ -11,6 +11,7 @@ from pathlib import Path
 import re
 import threading
 import time
+from collections.abc import Callable
 from typing import NamedTuple
 import urllib.parse
 
@@ -1093,7 +1094,7 @@ def _fetch_wayback_img_by_position(
     if utype == "og_image":
         og = soup.find("meta", property="og:image")
         if og and og.get("content"):
-            target_url = urllib.parse.urljoin(wayback_post, og["content"])
+            target_url = SIZE_W_RE.sub("", urllib.parse.urljoin(wayback_post, og["content"]))
             payload = _fetch_image(_add_im(target_url))
             if payload:
                 return payload
@@ -1109,7 +1110,7 @@ def _fetch_wayback_img_by_position(
             continue
         src = img.get("src") or img.get("data-src") or ""
         if src:
-            img_urls.append(urllib.parse.urljoin(wayback_post, src))
+            img_urls.append(SIZE_W_RE.sub("", urllib.parse.urljoin(wayback_post, src)))
 
     # idx는 1-based — KO 포스트에서의 순서와 대응
     target_idx = idx - 1
@@ -1553,6 +1554,114 @@ def _determine_filename(
 
 
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# 폴백 이미지 재처리 (--reprocess-fallbacks)
+# ---------------------------------------------------------------------------
+
+
+def _filter_file(filepath: Path, keep: Callable[[str], bool]) -> int:
+    """파일의 각 줄에 대해 keep 함수가 True인 줄만 남기고 재작성한다.
+
+    Returns:
+        제거된 줄 수.
+    """
+    if not filepath.exists():
+        return 0
+    lines = filepath.read_text(encoding="utf-8").splitlines()
+    kept = [ln for ln in lines if keep(ln)]
+    removed = len(lines) - len(kept)
+    if removed:
+        filepath.write_text("\n".join(kept) + ("\n" if kept else ""), encoding="utf-8")
+    return removed
+
+
+def _reprocess_fallbacks_cleanup() -> int:
+    """multilang/kakao 폴백 로그를 읽어 트래킹 파일에서 해당 항목을 제거한다.
+
+    Returns:
+        처리된 항목 수.
+    """
+    entries: list[tuple[str, str, str]] = []  # (saved_path, post_url, original_img_url)
+    for log_file in (MULTILANG_LOG_FILE, KAKAO_PF_LOG_FILE):
+        if not log_file.exists():
+            continue
+        for line in log_file.read_text(encoding="utf-8").splitlines():
+            parts = line.strip().split("\t")
+            if len(parts) < 3:
+                continue
+            saved_path = parts[0]
+            post_url = parts[1]
+            original_img_url = parts[3] if len(parts) >= 4 else ""
+            entries.append((saved_path, post_url, original_img_url))
+
+    if not entries:
+        print("[재처리] 폴백 로그에 항목이 없습니다.")
+        return 0
+
+    # 제거할 seen_key 집합
+    remove_seen: set[str] = set()
+    for _, _, orig_url in entries:
+        if orig_url:
+            cleaned = clean_url(_strip_ref_param(orig_url))
+            remove_seen.add(f"main:{cleaned}")
+            remove_seen.add(f"thumb:{cleaned}")
+
+    # 제거할 saved_path 집합
+    remove_paths = {e[0] for e in entries}
+
+    # 제거할 post_url 집합
+    remove_posts = {e[1] for e in entries}
+
+    # downloaded_urls.txt 필터
+    n = _filter_file(DONE_FILE, lambda ln: ln.strip() not in remove_seen)
+    if n:
+        print(f"  downloaded_urls.txt: {n}건 제거")
+
+    # image_hashes.tsv 필터 (2번째 컬럼이 saved_path인 줄 제거)
+    n = _filter_file(
+        IMG_HASH_FILE,
+        lambda ln: ln.split("\t")[1].strip() not in remove_paths
+        if "\t" in ln else True,
+    )
+    if n:
+        print(f"  image_hashes.tsv: {n}건 제거")
+
+    # image_map.tsv 필터 (2번째 컬럼이 saved_path인 줄 제거)
+    n = _filter_file(
+        IMAGE_MAP_FILE,
+        lambda ln: ln.split("\t")[1].strip() not in remove_paths
+        if "\t" in ln else True,
+    )
+    if n:
+        print(f"  image_map.tsv: {n}건 제거")
+
+    # done_posts_images.txt 필터
+    n = _filter_file(
+        DONE_POSTS_FILE,
+        lambda ln: ln.split("\t")[0].strip() not in remove_posts,
+    )
+    if n:
+        print(f"  done_posts_images.txt: {n}건 제거")
+
+    # failed_images.txt에 추가
+    added = 0
+    with FAILED_FILE.open("a", encoding="utf-8") as f:
+        for _, post_url, orig_url in entries:
+            if orig_url:
+                f.write(f"{post_url}\t{orig_url}\tdownload_failed\n")
+                added += 1
+    if added:
+        print(f"  failed_images.txt: {added}건 추가")
+
+    # 폴백 로그 클리어
+    for log_file in (MULTILANG_LOG_FILE, KAKAO_PF_LOG_FILE):
+        if log_file.exists():
+            log_file.write_text("", encoding="utf-8")
+
+    print(f"[재처리] {len(entries)}건 트래킹 제거 완료")
+    return len(entries)
+
+
 # 기존 폴백 이미지 일괄 rename (출처 접두사 부여)
 # ---------------------------------------------------------------------------
 
@@ -2176,6 +2285,7 @@ def run_images(
     force_download: bool = False,
     html_index: "dict[str, Path] | None" = None,
     max_workers: int = DEFAULT_MAX_WORKERS,
+    fallback_disabled: bool = False,
 ):
     ensure_utf8_console()
     ROOT_DIR.mkdir(parents=True, exist_ok=True)
@@ -2210,15 +2320,15 @@ def run_images(
             print("[이미지] 재처리 대상이 없습니다.")
             return
 
-    # 다국어 Wayback 폴백 (retry 모드에서만 활성화)
+    # 다국어 Wayback 폴백 (retry 모드에서만 활성화, fallback_disabled 시 스킵)
     multilang_date_index: dict[str, list[tuple[str, str]]] = {}
-    if retry_mode:
+    if retry_mode and not fallback_disabled:
         print("[이미지] 다국어 Wayback 폴백 활성화: EN/JA 사이트맵 인덱스 구축 중...")
         multilang_date_index = _build_multilang_date_index()
 
-    # Kakao PF 폴백 (retry 모드에서만 활성화)
+    # Kakao PF 폴백 (retry 모드에서만 활성화, fallback_disabled 시 스킵)
     kakao_pf_index: dict[str, list[KakaoPFPost]] = {}
-    if retry_mode:
+    if retry_mode and not fallback_disabled:
         print("[이미지] Kakao PF 폴백 활성화: 게시글 인덱스 구축 중...")
         kakao_pf_index = _build_kakao_pf_index()
         if kakao_pf_index:
@@ -2325,12 +2435,19 @@ if __name__ == "__main__":
                         help="KakaoPF 성공 이미지에 multilang alt 보충")
     parser.add_argument("--retry-kakaopf", action="store_true",
                         help="multilang 성공 이미지에 KakaoPF alt 보충")
+    parser.add_argument("--reprocess-fallbacks", action="store_true",
+                        help="원본 재시도: 기존 multilang/kakao 폴백 이미지를 원본으로 교체 시도")
     parser.add_argument("--posts", default=str(ROOT_DIR / "all_links.txt"), help="Posts list file")
     parser.add_argument("--backfill-map", action="store_true", help="Backfill image_map.tsv")
     args = parser.parse_args()
 
     if args.backfill_map:
         backfill_image_map()
+    elif args.reprocess_fallbacks:
+        cleaned = _reprocess_fallbacks_cleanup()
+        if cleaned:
+            posts = load_posts(args.posts)
+            run_images(posts, retry_mode=True, fallback_disabled=True)
     else:
         posts = load_posts(args.posts)
         run_images(posts, retry_mode=args.retry,

@@ -53,6 +53,8 @@ python3 run_all.py --custom             # custom_posts.txt 소스 사용 (사이
 python3 run_all.py --custom --md        # custom_posts.txt 대상 MD만
 python3 run_all.py --force              # 기존 기록 무시하고 전체 재다운로드
 
+python3 download_images.py --reprocess-fallbacks  # 폴백 이미지를 원본으로 교체 시도 (이후 --retry로 폴백 재시도 가능)
+
 python3 build_posts_list.py             # all_posts.txt / all_pages.txt / all_links.txt 수동 재생성
 ```
 

@@ -44,7 +44,7 @@ from build_posts_list import (
     SITEMAP_URL,
     SITEMAP_PAGES_URL,
 )
-from download_images import run_images
+from download_images import run_images, _reprocess_fallbacks_cleanup
 from download_md import run_md
 from download_html import run_html
 
@@ -224,6 +224,8 @@ def main():
                         help="KakaoPF 성공 이미지에 multilang alt 보충")
     parser.add_argument("--retry-kakaopf", action="store_true",
                         help="multilang 성공 이미지에 KakaoPF alt 보충")
+    parser.add_argument("--reprocess-fallbacks", action="store_true",
+                        help="원본 재시도: 기존 multilang/kakao 폴백 이미지를 원본으로 교체 시도")
     parser.add_argument(
         "--posts",
         action="store_true",
@@ -257,10 +259,12 @@ def main():
         parser.error("--posts / --pages / --custom 과 --sample 은 동시에 사용할 수 없습니다")
 
     # ── 파이프라인 단계 결정 ────────────────────────────────────────────
+    # --retry / --reprocess-fallbacks 는 이미지 전용이므로 images 단계만 선택
+    images_only_flags = args.retry or args.reprocess_fallbacks
     user_selected = {
         name
         for name, enabled in (
-            ("images", args.images),
+            ("images", args.images or images_only_flags),
             ("md", args.md),
             ("html", args.html),
         )
@@ -379,11 +383,17 @@ def main():
         elif step == "images":
             print("▶ 이미지 다운로드 시작")
             print("━" * 60)
-            run_images(posts, retry_mode=args.retry,
-                       retry_multilang=args.retry_multilang,
-                       retry_kakaopf=args.retry_kakaopf,
-                       force_download=force_download,
-                       html_index=html_index, max_workers=max_workers)
+            if args.reprocess_fallbacks:
+                cleaned = _reprocess_fallbacks_cleanup()
+                if cleaned:
+                    run_images(posts, retry_mode=True, fallback_disabled=True,
+                               html_index=html_index, max_workers=max_workers)
+            else:
+                run_images(posts, retry_mode=args.retry,
+                           retry_multilang=args.retry_multilang,
+                           retry_kakaopf=args.retry_kakaopf,
+                           force_download=force_download,
+                           html_index=html_index, max_workers=max_workers)
         elif step == "md":
             print("▶ MD 파일 저장 시작")
             print("━" * 60)

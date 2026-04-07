@@ -146,15 +146,18 @@ class KakaoPFPost(NamedTuple):
 | 함수 | 설명 |
 |------|------|
 | `_build_multilang_date_index() -> dict[str, list[tuple[str, str]]]` | EN/JA 사이트맵에서 `{date: [(url, lang), ...]}` 인덱스 구축 |
-| `_fetch_multilang_wayback_image(...)` | 대체 언어의 Wayback 포스트 스냅샷에서 같은 위치(인덱스) 기반으로 이미지 탐색 |
+| `_fetch_multilang_wayback_image(...)` | 대체 언어의 Wayback 포스트 스냅샷에서 이미지 탐색. Phase A → A-2 → B 순서 |
+| `_fetch_wayback_img_by_position(alt_post_url, idx, utype, ...)` | Phase B: Wayback 포스트 스냅샷에서 idx(1-based) 위치의 이미지를 다운로드. `<img src>`에서 `/size/wN`을 제거하여 원본 해상도로 fetch |
 
 ### 처리 흐름
 
 1. `run_images`에서 `retry_mode=True` 시 EN/JA 사이트맵 인덱스 구축
 2. 각 이미지의 `download_one_image`에서 기본 + Kakao PF 폴백 실패 후 시도
-3. `post_date` 기반으로 같은 날짜의 EN/JA 포스트 URL 탐색
-4. Wayback Machine에서 해당 포스트 스냅샷 fetch → 같은 인덱스 위치의 이미지 추출
-5. 성공 시 `_multilang_log_buf`에 로그 기록
+3. `_fetch_multilang_wayback_image` 내부 3단계:
+   - **Phase A**: URL/파일명 기반 — 원본 이미지 URL의 언어별 변환 URL을 Wayback에서 직접 탐색
+   - **Phase A-2**: 포스트 HTML에서 URL 매칭 — EN/JA 포스트의 Wayback 스냅샷에서 같은 URL 탐색
+   - **Phase B**: Position 기반 — EN/JA 포스트의 N번째 이미지를 대체로 사용. `SIZE_W_RE`로 `/size/wN` 제거 후 fetch
+4. 성공 시 `_multilang_log_buf`에 로그 기록
 
 ---
 
@@ -186,15 +189,92 @@ class KakaoPFPost(NamedTuple):
 def run_images(
     posts: list[tuple[str, str]],
     retry_mode: bool = False,
+    retry_multilang: bool = False,
+    retry_kakaopf: bool = False,
     force_download: bool = False,
     html_index: dict[str, Path] | None = None,
     max_workers: int = DEFAULT_MAX_WORKERS,
+    fallback_disabled: bool = False,
 ) -> None:
 ```
 
 - `force_download=True`: `done_post_urls` 빈 dict으로 초기화, `seen_urls` 빈 set으로 초기화.
 - `html_index`: `fetch_post_html(url, html_index)`를 통해 로컬 HTML 우선 조회.
-- `retry_mode=True`: 다국어 Wayback 폴백 + Kakao PF 폴백 자동 활성화.
+- `retry_mode=True`: 다국어 Wayback 폴백 + Kakao PF 폴백 자동 활성화 (`fallback_disabled` 미설정 시).
+- `fallback_disabled=True`: `retry_mode=True`여도 multilang/kakao 인덱스를 구축하지 않음. 원본 + 원본 Wayback만으로 재시도. `--reprocess-fallbacks`에서 사용.
+
+---
+
+## 콘솔 출력 로그
+
+### 진행도 로그
+
+```
+[  100/2413 |  4.1% | Elapsed 00:01:23] 저장=50 중복=30 기존=5 실패=2
+```
+
+| 항목 | 계산식 | 의미 |
+|------|--------|------|
+| **저장** (`total_saved`) | `"original"` + `"multilang"` + `"kakao"` 반환 건수 | 디스크에 새 파일을 저장한 건수 |
+| **중복** (`total_dedup`) | `"dup"` 반환 건수 | URL은 다르지만 SHA-256 해시가 동일하여 저장을 생략한 건수 |
+| **기존** (`existing`) | `total_ok - total_saved - total_dedup` | `seen_urls` 히트 (`"already"` 반환). 이미 처리된 URL의 재등장 |
+| **실패** (`total_fail`) | `""` 반환 건수 | 다운로드 실패 |
+
+retry 모드에서는 저장 내역이 원본/multilang/kakao로 세분화:
+```
+저장=3 (원본=1 multilang=1 kakao=1) 중복=0 기존=29 실패=16
+```
+
+### `download_one_image` 반환값
+
+| 반환값 | 의미 | 카운트 |
+|--------|------|--------|
+| `"already"` | `seen_urls`에 이미 존재 (같은 URL 중복) | ok (기존) |
+| `"dup"` | 해시 중복 — 다른 URL이지만 동일 콘텐츠 | ok (중복) |
+| `"original"` | 원본/KO Wayback으로 새로 저장 | ok (저장) |
+| `"multilang"` | 다국어 Wayback 폴백으로 새로 저장 | ok (저장) |
+| `"kakao"` | Kakao PF 폴백으로 새로 저장 | ok (저장) |
+| `""` | 실패 | fail |
+
+### 최초 실행에서 "중복"과 "기존"이 발생하는 이유
+
+- **기존**: `ThreadPoolExecutor`로 여러 포스트를 동시 처리하므로, 같은 이미지 URL이 여러 포스트에 등장하면 먼저 처리한 스레드가 `seen_urls`에 추가하고 이후 스레드는 `"already"` 반환.
+- **중복**: 서로 다른 URL(예: CDN 리사이즈 파라미터만 다른 URL들)이 같은 콘텐츠를 서빙하는 경우.
+
+### --retry에서 재처리 대상이 줄어드는 메커니즘
+
+1. `failed_images.txt`에서 고유 포스트 URL 추출
+2. 각 포스트의 모든 이미지를 재처리 — 이전 실행에서 성공한 이미지는 `seen_urls`에 있으므로 `"already"` 반환 (ok)
+3. `remove_from_failed_batch()`로 성공한 이미지의 failed 엔트리 제거
+4. 포스트의 모든 이미지가 ok(fail=0)이면 `done_post_urls`에 추가
+5. 다음 `--retry` 실행 시 `failed_images.txt`에 남은 항목만 대상
+6. **저장=0이어도** `"already"`로 처리된 이미지들이 failed 엔트리에서 제거되므로 대상 포스트 수가 줄어듦
+
+---
+
+## 폴백 재처리 (`--reprocess-fallbacks`)
+
+기존 multilang/kakao 폴백으로 저장된 이미지를 원본 소스로 교체 시도.
+
+### 처리 흐름
+
+1. `_reprocess_fallbacks_cleanup()` 호출:
+   - `multilang_fallback.tsv`, `kakao_pf_log.tsv` 읽기
+   - 각 항목의 트래킹 제거 (`downloaded_urls.txt`, `image_hashes.tsv`, `image_map.tsv`, `done_posts_images.txt`)
+   - `failed_images.txt`에 원본 이미지 URL 추가
+   - 폴백 로그 클리어
+2. `run_images(retry_mode=True, fallback_disabled=True)` 실행:
+   - 원본 + 원본 Wayback만 시도 (multilang/kakao 인덱스 미구축)
+   - 원본 성공 → 원본 이미지로 교체
+   - 원본 실패 → `failed_images.txt`에 남음
+3. 사용자가 이후 `--retry`로 (수정된) 폴백 재시도 가능
+
+### 유틸리티 함수
+
+| 함수 | 설명 |
+|------|------|
+| `_filter_file(filepath, keep)` | 파일의 각 줄에 대해 `keep(line)=True`인 줄만 남기고 재작성. 제거된 줄 수 반환 |
+| `_reprocess_fallbacks_cleanup()` | 폴백 로그 기반 트래킹 정리. 처리된 항목 수 반환 |
 
 ---
 
