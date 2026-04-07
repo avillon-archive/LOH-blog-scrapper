@@ -107,7 +107,24 @@ def _detect_non_image_urls(soup: BeautifulSoup, post_url: str) -> set[str]:
         if any(kw in anchor_text for kw in _NON_IMAGE_CONTEXT_KEYWORDS):
             skip_urls.add(_clean_img_url(abs_href))
             continue
+        # 같은 부모 블록 내 이전 텍스트에서 키워드 탐색
+        _found = False
+        for sib in anchor.previous_siblings:
+            sib_text = (
+                sib.get_text(strip=True) if hasattr(sib, "get_text") else str(sib)
+            ).lower()
+            if any(kw in sib_text for kw in _NON_IMAGE_CONTEXT_KEYWORDS):
+                skip_urls.add(_clean_img_url(abs_href))
+                _found = True
+                break
+            if len(sib_text) > 200:
+                break
+        if _found:
+            continue
+        # content_tag 내 이전 heading에서 키워드 탐색
         for prev in anchor.find_all_previous(["h1", "h2", "h3", "h4", "h5", "h6"]):
+            if content_tag not in (prev.parents if hasattr(prev, "parents") else []):
+                break
             text = prev.get_text(strip=True).lower()
             if any(kw in text for kw in _NON_IMAGE_CONTEXT_KEYWORDS):
                 skip_urls.add(_clean_img_url(abs_href))
