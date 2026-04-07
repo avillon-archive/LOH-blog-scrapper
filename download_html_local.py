@@ -300,9 +300,7 @@ class HtmlLocalizer:
                 meta["content"] = new_src
 
         # favicon
-        for link in self._soup.find_all(
-            "link", rel=lambda v: v and "icon" in " ".join(v).lower()
-        ):
+        for link in self._soup.find_all("link", rel="icon"):
             href = link.get("href", "")
             new_src, mapped = self._rewrite_img(href)
             if mapped:
