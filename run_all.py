@@ -21,6 +21,7 @@ Usage:
 
 import argparse
 import random
+import signal
 import sys
 import time
 from pathlib import Path
@@ -32,9 +33,11 @@ from utils import (
     DEFAULT_MAX_WORKERS,
     build_html_index,
     ensure_utf8_console,
+    flush_all_buffers,
     load_failed_post_urls,
     load_posts,
     set_blog_rate_limit,
+    shutdown_event,
 )
 from build_posts_list import (
     build_and_write,
@@ -224,7 +227,26 @@ def _count_file_lines(posts_file: Path) -> int:
         return 0
 
 
+_ctrl_c_count = 0
+
+
+def _shutdown_handler(signum, frame):
+    global _ctrl_c_count
+    _ctrl_c_count += 1
+    if _ctrl_c_count == 1:
+        print("\n" + "━" * 60)
+        print("  Ctrl+C 감지: 진행 중인 작업 완료 후 종료합니다...")
+        print("  (즉시 종료: Ctrl+C 한 번 더)")
+        print("━" * 60)
+        shutdown_event.set()
+    else:
+        print("\n  강제 종료: 버퍼 플러시 중...")
+        flush_all_buffers()
+        sys.exit(1)
+
+
 def main():
+    signal.signal(signal.SIGINT, _shutdown_handler)
     ensure_utf8_console()
     parser = argparse.ArgumentParser(
         description="로드 오브 히어로즈 블로그 스크래퍼",
@@ -384,6 +406,9 @@ def main():
     html_index: dict[str, "Path"] | None = None
 
     for step in selected_order:
+        if shutdown_event.is_set():
+            print("[중단] 남은 단계 건너뜀")
+            break
         print("━" * 60)
         if step == "html":
             html_is_primary = "html" in user_selected
@@ -449,11 +474,17 @@ def main():
             )
         print()
 
+    flush_all_buffers()
+
     elapsed = time.time() - total_start
     h = int(elapsed // 3600)
     m = int((elapsed % 3600) // 60)
     s = int(elapsed % 60)
-    print(f"[전체 완료] 소요 시간: {h:02d}:{m:02d}:{s:02d}")
+    if shutdown_event.is_set():
+        print(f"[중단 완료] 소요 시간: {h:02d}:{m:02d}:{s:02d}")
+        sys.exit(130)
+    else:
+        print(f"[전체 완료] 소요 시간: {h:02d}:{m:02d}:{s:02d}")
 
 
 if __name__ == "__main__":

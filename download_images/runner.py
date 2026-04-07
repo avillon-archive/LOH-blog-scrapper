@@ -4,7 +4,7 @@
 import csv
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import CancelledError, ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from utils import (
@@ -14,6 +14,7 @@ from utils import (
     eta_str,
     load_failed_post_urls,
     load_image_map,
+    shutdown_event,
 )
 
 from .constants import (
@@ -151,10 +152,14 @@ def run_images(
             ): (url, date)
             for url, date, pub_time, *_ in posts
         }
+        cancelled_count = 0
         for future in as_completed(future_to_post):
             post_url, _ = future_to_post[future]
             try:
                 result = future.result()
+            except CancelledError:
+                cancelled_count += 1
+                continue
             except Exception as exc:
                 print(f"  [오류] {post_url}: {exc}")
                 result = PostProcessResult(ok=0, fail=1, post_fetch_ok=False)
@@ -178,14 +183,23 @@ def run_images(
                 print(f"  {eta} 저장={total_saved} 중복={total_dedup} "
                       f"기존={existing} 실패={total_fail}")
 
+            if shutdown_event.is_set():
+                for f in future_to_post:
+                    f.cancel()
+                break
+
     _done_buf.flush_all()
     _map_buf.flush_all()
     _img_hash_buf.flush_all()
     _done_posts_buf.flush_all()
 
     existing = total_ok - total_saved - total_dedup
-    print(f"\n[이미지 완료] 저장={total_saved} 중복={total_dedup} "
-          f"기존={existing} 실패={total_fail}")
+    if shutdown_event.is_set():
+        print(f"\n[이미지 중단] 저장={total_saved} 중복={total_dedup} "
+              f"기존={existing} 실패={total_fail} 취소={total - completed - cancelled_count}")
+    else:
+        print(f"\n[이미지 완료] 저장={total_saved} 중복={total_dedup} "
+              f"기존={existing} 실패={total_fail}")
 
 
 # ---------------------------------------------------------------------------
@@ -264,10 +278,14 @@ def run_fallback_images(
             ): (url, date)
             for url, date, pub_time, *_ in posts
         }
+        cancelled_count = 0
         for future in as_completed(future_to_post):
             post_url, _ = future_to_post[future]
             try:
                 result = future.result()
+            except CancelledError:
+                cancelled_count += 1
+                continue
             except Exception as exc:
                 print(f"  [오류] {post_url}: {exc}")
                 result = PostProcessResult(ok=0, fail=0, post_fetch_ok=False)
@@ -284,6 +302,11 @@ def run_fallback_images(
                 print(f"  {eta} 저장={total_saved} "
                       f"(multilang={total_multilang} kakao={total_kakao})")
 
+            if shutdown_event.is_set():
+                for f in future_to_post:
+                    f.cancel()
+                break
+
     _fb_done_buf.flush_all()
     _fb_map_buf.flush_all()
     _fb_img_hash_buf.flush_all()
@@ -294,5 +317,10 @@ def run_fallback_images(
     if csv_count:
         print(f"[폴백] 리포트: {FALLBACK_REPORT_FILE} ({csv_count}건)")
 
-    print(f"\n[폴백 완료] 저장={total_saved} "
-          f"(multilang={total_multilang} kakao={total_kakao})")
+    if shutdown_event.is_set():
+        print(f"\n[폴백 중단] 저장={total_saved} "
+              f"(multilang={total_multilang} kakao={total_kakao}) "
+              f"취소={total - completed - cancelled_count}")
+    else:
+        print(f"\n[폴백 완료] 저장={total_saved} "
+              f"(multilang={total_multilang} kakao={total_kakao})")

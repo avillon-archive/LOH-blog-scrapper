@@ -7,7 +7,7 @@ import sys
 import threading
 import time
 import urllib.parse
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import CancelledError, ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable
 
@@ -18,6 +18,13 @@ if TYPE_CHECKING:
 
 # File I/O lock for append/filter/remove helpers.
 _file_lock = threading.Lock()
+
+# ---------------------------------------------------------------------------
+# Graceful shutdown
+# ---------------------------------------------------------------------------
+shutdown_event = threading.Event()          # 전역 중단 신호
+_line_buffers: list["LineBuffer"] = []      # LineBuffer 레지스트리
+_line_buffers_lock = threading.Lock()
 
 # Default number of parallel workers for ThreadPoolExecutor.
 DEFAULT_MAX_WORKERS: int = 8
@@ -497,6 +504,8 @@ class LineBuffer:
         self._flush_every = flush_every
         self._buf: list[str] = []
         self._lock = threading.Lock()
+        with _line_buffers_lock:
+            _line_buffers.append(self)
 
     def add(self, line: str) -> None:
         """줄을 버퍼에 추가한다. 버퍼가 flush_every 건을 초과하면 자동 flush."""
@@ -518,6 +527,18 @@ class LineBuffer:
         with open(self._filepath, "a", encoding="utf-8") as f:
             f.write("\n".join(self._buf) + "\n")
         self._buf.clear()
+
+
+def flush_all_buffers() -> int:
+    """등록된 모든 LineBuffer를 플러시한다. 플러시한 버퍼 수를 반환."""
+    with _line_buffers_lock:
+        buffers = list(_line_buffers)
+    for buf in buffers:
+        try:
+            buf.flush_all()
+        except Exception:
+            pass
+    return len(buffers)
 
 
 # ---------------------------------------------------------------------------
@@ -560,6 +581,8 @@ def run_pipeline(
     completed = 0
     counter_lock = threading.Lock()
 
+    cancelled_count = 0
+
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         future_to_post = {
             executor.submit(process_fn, url, date): (url, date)
@@ -569,6 +592,9 @@ def run_pipeline(
             post_url, _ = future_to_post[future]
             try:
                 success = future.result()
+            except CancelledError:
+                cancelled_count += 1
+                continue
             except Exception as exc:
                 print(f"  [오류] {post_url}: {exc}")
                 success = False
@@ -587,7 +613,15 @@ def run_pipeline(
             if cur_completed % report_interval == 0 or cur_completed == total:
                 print(f"  {eta_str(cur_completed, total, start)} 성공={ok_count} 실패={fail_count}")
 
-    print(f"\n[{label} 완료] 성공={ok_count}, 실패={fail_count}")
+            if shutdown_event.is_set():
+                for f in future_to_post:
+                    f.cancel()
+                break
+
+    if shutdown_event.is_set():
+        print(f"\n[{label} 중단] 성공={ok_count}, 실패={fail_count}, 취소={total - completed - cancelled_count}")
+    else:
+        print(f"\n[{label} 완료] 성공={ok_count}, 실패={fail_count}")
 
 
 # ---------------------------------------------------------------------------

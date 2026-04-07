@@ -31,11 +31,21 @@ slug 충돌 해소 + 파일 저장. MD/HTML 공통.
 
 모듈 수준 `append_line`과 달리 `_file_lock`을 경유하지 않으므로 `_state_lock`/`_save_lock`과 경합하지 않는다. run 종료 시 `flush_all()` 필수.
 
+생성 시 `_line_buffers` 레지스트리에 자동 등록된다. `flush_all_buffers()`로 등록된 모든 LineBuffer를 일괄 플러시.
+
+---
+
+## Graceful Shutdown
+
+`shutdown_event` (`threading.Event`): 전역 중단 신호. `run_pipeline()`과 `download_images/runner.py`의 `as_completed` 루프에서 매 future 처리 후 체크. set 시 대기열의 미실행 future를 `cancel()` 하고 `break`.
+
 ---
 
 ## run_pipeline
 
 MD/HTML 공통 ThreadPoolExecutor 루프. 진행도 출력 간격: **100개 이하면 10개 단위, 초과면 50개 단위**. `download_images/`는 독립 구현이지만 동일 간격 규칙 적용.
+
+`shutdown_event` 감지 시 대기열 취소 후 중단 요약 출력 (`[{label} 중단] 성공=X, 실패=Y, 취소=Z`).
 
 ---
 

@@ -25,6 +25,17 @@ posts > 100건: workers = 8, rate_limit = 10 req/s
 
 **`--custom`**: 사이트맵 갱신 건너뜀.
 
+## 안전 중단 (Graceful Shutdown)
+
+2단계 `Ctrl+C` 핸들러 (`signal.SIGINT`):
+
+1. **1회**: `shutdown_event.set()` → 진행 중인 작업 완료 대기, 대기열 취소, 남은 파이프라인 단계 건너뜀 → `flush_all_buffers()` → `sys.exit(130)`.
+2. **2회**: 즉시 `flush_all_buffers()` → `sys.exit(1)`.
+
+정상 종료 시에도 `flush_all_buffers()`를 안전망으로 호출한다.
+
+---
+
 ## 파이프라인 실행
 
 ### html 단계

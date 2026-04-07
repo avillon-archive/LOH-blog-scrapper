@@ -30,6 +30,10 @@
 
 트래킹 파일: `done_*.txt`(완료), `failed_*.txt`(실패), `stale_*.txt`(재생성 대상), `downloaded_urls.txt`, `image_map.tsv`, `image_hashes.tsv`.
 
+### 안전 중단
+
+`Ctrl+C` 1회로 graceful shutdown (진행 중 작업 완료 대기 + 대기열 취소 + LineBuffer 일괄 플러시), 2회로 즉시 종료 (플러시 후 exit). 상세: [CONTEXT_RUN.md](CONTEXT_RUN.md).
+
 ---
 
 ## 카테고리
