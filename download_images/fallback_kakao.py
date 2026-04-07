@@ -180,13 +180,15 @@ def _fetch_kakao_pf_image(
     idx: int,
     kakao_pf_index: dict[str, list[KakaoPFPost]],
     blog_title: str = "",
+    published_time: str = "",
 ) -> tuple[bytes, str, str, str, str] | None:
     """Kakao PF 포스트에서 이미지를 탐색하는 폴백 함수.
 
     Returns:
         성공 시 (content, final_url, content_type, cd, kakao_permalink) 5-tuple.
     """
-    candidates = kakao_pf_index.get(post_date)
+    lookup_date = published_time[:10] if published_time else post_date
+    candidates = kakao_pf_index.get(lookup_date)
     if not candidates:
         return None
 

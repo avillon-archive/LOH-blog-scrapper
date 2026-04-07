@@ -91,7 +91,7 @@ class ImageFailedLog:
 content_tag 탐색: `_get_content_tag(soup)` 헬퍼 — `.gh-content` → `.post-content` → `article` → `main` 순.
 URL 정규화: `_clean_img_url(url)` — `_strip_ref_param()` + `clean_url()` 조합. Ghost CMS `ref` 쿼리 파라미터 제거.
 Google Drive 링크 중 `/spreadsheets/`, `/forms/` 경로와 `_SKIP_LINK_HOSTS` 도메인은 건너뜀.
-`_detect_non_image_urls(soup, post_url)` — 앵커 주변 heading에서 BGM/OST 등 비이미지 키워드 감지 시 해당 URL 제외.
+`_detect_non_image_urls(soup, post_url)` — GDrive 앵커 주변에서 BGM/OST 등 비이미지 키워드 감지 시 해당 URL 제외. 검사 순서: ① 앵커 텍스트 자체, ② 같은 부모 블록 내 이전 sibling 텍스트(200자 이내), ③ content_tag **내부**의 이전 heading. content_tag 외부 heading(작성자 카드 등)은 무시.
 
 ---
 

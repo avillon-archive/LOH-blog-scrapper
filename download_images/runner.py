@@ -85,7 +85,7 @@ def _generate_fallback_csv() -> int:
 
 
 def run_images(
-    posts: list[tuple[str, str]],
+    posts: list[tuple[str, str, str]],
     retry_mode: bool = False,
     retry_multilang: bool = False,
     retry_kakaopf: bool = False,
@@ -164,8 +164,9 @@ def run_images(
                 retry_mode=retry_mode,
                 multilang_date_index=multilang_date_index,
                 kakao_pf_index=kakao_pf_index,
+                published_time=pub_time,
             ): (url, date)
-            for url, date, *_ in posts
+            for url, date, pub_time, *_ in posts
         }
         for future in as_completed(future_to_post):
             post_url, _ = future_to_post[future]
