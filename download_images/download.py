@@ -146,6 +146,7 @@ def download_one_image(
     multilang_date_index: dict[str, list[tuple[str, str]]] | None = None,
     kakao_pf_index: dict[str, list[KakaoPFPost]] | None = None,
     published_time: str = "",
+    ko_category: str = "",
 ) -> str:
     """이미지 1건 다운로드. 성공 방식을 나타내는 문자열을 반환한다.
 
@@ -208,6 +209,8 @@ def download_one_image(
             post_url, img_url, post_date, utype, idx,
             multilang_date_index, post_soup_cache,
             published_time=published_time,
+            ko_lastmod=post_date,
+            ko_category=ko_category,
         )
 
     # ── 폴백 결과 선택 ────────────────────────────────────────────────────

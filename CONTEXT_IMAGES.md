@@ -162,24 +162,36 @@ class KakaoPFPost(NamedTuple):
 - `MULTILANG_BLOG_HOSTS = {"en": "blog-en.lordofheroes.com", "ja": "blog-ja.lordofheroes.com"}`
 - `MULTILANG_EARLIEST_DATE`: 언어별 최초 포스트 날짜
 - `MULTILANG_LOG_FILE = IMAGES_DIR / "multilang_fallback.tsv"`
+- `KO_TO_LANG_CAT`: KO→EN/JA 카테고리 매핑 (공지사항→Notice/お知らせ 등)
+- `EN_CAT_NORMALIZE`, `JA_CAT_NORMALIZE`: 잔존 태그 정규화 (New Hero→Universe 등)
 
 ### 주요 함수
 
 | 함수 | 설명 |
 |------|------|
-| `_build_multilang_date_index() -> dict[str, list[tuple[str, str]]]` | EN/JA `all_links_{lang}.txt`에서 `{published_date: [(url, lang), ...]}` 인덱스 구축. 캐시: `multilang_published_index.json` (all_links 파일 mtime 비교) |
-| `_fetch_multilang_wayback_image(..., published_time)` | 대체 언어의 Wayback 포스트 스냅샷에서 이미지 탐색. Phase A → A-2 → B 순서. `published_time[:10]`으로 후보 조회 |
-| `_multilang_post_url_candidates(ko_url, post_date, date_index, published_time)` | slug 교체 후보 + date_index 후보 반환. `published_time[:10]` 우선, 없으면 `post_date` |
+| `_build_multilang_date_index() -> dict[str, list[tuple[str, str]]]` | EN/JA `all_links_{lang}.txt`에서 `{published_date: [(url, lang), ...]}` 인덱스 구축. 카테고리/lastmod 인덱스도 함께 구축. 캐시: `multilang_published_index.json` (all_links + html_dir mtime 비교) |
+| `_build_multilang_cat_index() -> dict[str, str]` | EN/JA HTML에서 `{url: normalized_category}` 추출. `_categories`로 JSON 캐시에 포함 |
+| `_multilang_post_url_candidates(...) -> (confirmed, unconfirmed)` | slug 교체 후보 + date_index 후보를 카테고리/lastmod 시그널로 스코어링하여 confirmed/unconfirmed 분류. confirmed = slug 교체 또는 시그널 1개 이상 일치 |
+| `_fetch_multilang_wayback_image(..., ko_lastmod, ko_category)` | 대체 언어의 Wayback 포스트 스냅샷에서 이미지 탐색. Phase A → A-2(전체 후보) → B(confirmed만) |
 | `_fetch_wayback_img_by_position(alt_post_url, idx, utype, ...)` | Phase B: Wayback 포스트 스냅샷에서 idx(1-based) 위치의 이미지를 다운로드. `<img src>`에서 `/size/wN`을 제거하여 원본 해상도로 fetch |
+
+### 후보 정렬 시그널
+
+| 시그널 | 설명 | 효과 |
+|--------|------|------|
+| 카테고리 | KO 카테고리 → EN/JA 매핑 일치 여부 | 주력 (단독 확정 ~40%) |
+| lastmod | KO lastmod와 EN/JA lastmod 일치 여부 | 보조 (카테고리 실패 시 추가 ~3%) |
+
+스코어링: 카테고리 일치 +1, lastmod 일치 +1. score > 0 → confirmed, score == 0 → unconfirmed. confirmed 내 score 내림차순 정렬.
 
 ### 처리 흐름
 
-1. `run_images`에서 `retry_mode=True` 시 EN/JA published_time 인덱스 구축 (`all_links_en/ja.txt` 필요)
+1. `run_images`에서 `retry_mode=True` 시 EN/JA published_time + 카테고리 + lastmod 인덱스 구축
 2. 각 이미지의 `download_one_image`에서 기본 + Kakao PF 폴백 실패 후 시도
 3. `_fetch_multilang_wayback_image` 내부 3단계:
    - **Phase A**: URL/파일명 기반 — 원본 이미지 URL의 언어별 변환 URL을 Wayback에서 직접 탐색
-   - **Phase A-2**: 포스트 HTML에서 URL 매칭 — EN/JA 포스트의 Wayback 스냅샷에서 같은 URL 탐색
-   - **Phase B**: Position 기반 — EN/JA 포스트의 N번째 이미지를 대체로 사용. `SIZE_W_RE`로 `/size/wN` 제거 후 fetch
+   - **Phase A-2**: 포스트 HTML에서 URL 매칭 — **전체 후보**(confirmed+unconfirmed) 순회. URL 매칭은 안전하므로
+   - **Phase B**: Position 기반 — **confirmed만** 순회. 위치 기반은 오매칭 위험이 있으므로 시그널 일치 후보로 제한
 4. 성공 시 `_multilang_log_buf`에 로그 기록
 
 ---

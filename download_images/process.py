@@ -124,6 +124,7 @@ def process_post(
             multilang_date_index=multilang_date_index,
             kakao_pf_index=kakao_pf_index,
             published_time=published_time,
+            ko_category=category,
         )
         if how:
             ok += 1
@@ -407,6 +408,8 @@ def _supplement_alt_images(
                     post_url, img_url, post_date, utype, idx,
                     multilang_date_index, post_soup_cache,
                     published_time=published_time,
+                    ko_lastmod=post_date,
+                    ko_category=category,
                 )
             else:
                 result = _fetch_kakao_pf_image(

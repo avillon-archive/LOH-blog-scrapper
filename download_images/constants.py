@@ -46,6 +46,22 @@ MULTILANG_EARLIEST_DATE = {"en": "2020-10-20", "ja": "2021-01-15"}
 _KO_SUFFIX_RE = re.compile(r"(?i)_ko(?=[\._\-])")
 _LANG_SUFFIX_MAP = {"en": "_EN", "ja": "_JP"}
 
+# EN/JA 카테고리 정규화 (개편으로 인한 잔존 태그 통합)
+EN_CAT_NORMALIZE = {"New Hero": "Universe", "avillontoon": "Gallery"}
+JA_CAT_NORMALIZE = {"漫画": "ユニバース", "Event-Completed": "イベント"}
+
+# KO → EN/JA 카테고리 매핑
+KO_TO_LANG_CAT: dict[str, dict[str, str]] = {
+    "en": {
+        "공지사항": "Notice", "이벤트": "Event", "쿠폰": "Coupon",
+        "유니버스": "Universe", "갤러리": "Gallery", "아발론서고": "Gallery",
+    },
+    "ja": {
+        "공지사항": "お知らせ", "이벤트": "イベント", "쿠폰": "クーポン",
+        "유니버스": "英雄紹介", "갤러리": "ユニバース", "아발론서고": "ユニバース",
+    },
+}
+
 KAKAO_PF_PROFILE = "_YXZqxb"
 KAKAO_PF_API = f"https://pf.kakao.com/rocket-web/web/profiles/{KAKAO_PF_PROFILE}/posts"
 
