@@ -150,11 +150,20 @@ def _rewrite_img_src(
 
 # 블로그 내부 경로 패턴: /postXXX/, /pageXXX/, /slug/ 등
 BLOG_HOST_RE = re.compile(
-    r"^https?://blog-ko\.lordofheroes\.com(/.*)",
+    r"^https?://blog-ko\.lordofheroes\.com(/.*)?$",
     re.IGNORECASE,
 )
 
 _EXCLUDED_PATHS = frozenset(("tag", "author", "rss", "assets", "content", "public"))
+
+TAG_SLUG_TO_CATEGORY: dict[str, str] = {
+    "notices": "공지사항",
+    "events": "이벤트",
+    "gallery": "갤러리",
+    "universe": "유니버스",
+    "library": "아발론서고",
+    "coupon": "쿠폰",
+}
 
 
 class HtmlLocalizer:
@@ -185,6 +194,7 @@ class HtmlLocalizer:
         self._rewrite_meta_images()
         self._rewrite_style_bg_images()
         self._rewrite_internal_links()
+        self._rewrite_home_logo()
         self._remove_scripts()
         return str(self._soup)
 
@@ -292,14 +302,32 @@ class HtmlLocalizer:
 
             m = BLOG_HOST_RE.match(href)
             if m:
-                path = m.group(1)
+                path = m.group(1) or "/"
             elif href.startswith("/"):
                 path = href
             else:
                 continue
 
             segments = [s for s in path.split("/") if s]
-            if not segments or segments[0] in _EXCLUDED_PATHS:
+            if not segments:
+                # 루트 경로 → 홈 index
+                if self._category:
+                    a["href"] = "../index.html"
+                else:
+                    a["href"] = "index.html"
+                continue
+
+            # /tag/{slug}/ → 카테고리 목록 페이지
+            if segments[0] == "tag" and len(segments) >= 2:
+                category = TAG_SLUG_TO_CATEGORY.get(segments[1])
+                if category:
+                    if self._category:
+                        a["href"] = f"../{category}/index.html"
+                    else:
+                        a["href"] = f"{category}/index.html"
+                    continue
+
+            if segments[0] in _EXCLUDED_PATHS:
                 continue
 
             rel_path = self._slug_map.get(segments[0])
@@ -310,6 +338,13 @@ class HtmlLocalizer:
                 a["href"] = f"../{rel_path}"
             else:
                 a["href"] = rel_path
+
+    def _rewrite_home_logo(self) -> None:
+        """블로그 홈 로고 링크를 로컬 index.html로 리라이트."""
+        target = "../index.html" if self._category else "index.html"
+        for logo in self._soup.find_all("a", class_="site-nav-logo"):
+            if logo.get("href"):
+                logo["href"] = target
 
     # -- JS 제거 --
 
@@ -350,6 +385,75 @@ def _build_slug_map(
 
 
 # ---------------------------------------------------------------------------
+# 목록 페이지 fetch & 합치기
+# ---------------------------------------------------------------------------
+
+_MAX_LISTING_PAGES = 100  # rel="next" 무한루프 방지
+
+
+def _fetch_all_articles(
+    url: str,
+) -> tuple[BeautifulSoup, list] | None:
+    """목록 페이지의 모든 pagination을 fetch하여 전체 article 목록을 반환.
+
+    Returns:
+        (page1_soup, all_articles) 또는 fetch 실패 시 None.
+    """
+    resp = fetch_with_retry(url)
+    if resp is None:
+        return None
+    page1_soup = BeautifulSoup(resp.text, "lxml")
+    post_feed = page1_soup.find("div", class_="post-feed")
+    if post_feed is None:
+        return None
+
+    all_articles = list(post_feed.find_all("article", class_="post-card"))
+
+    # 나머지 페이지 순회
+    current_soup = page1_soup
+    for _ in range(_MAX_LISTING_PAGES):
+        next_link = current_soup.find("link", rel="next")
+        if next_link is None:
+            break
+        next_url = next_link.get("href", "")
+        if not next_url:
+            break
+        resp = fetch_with_retry(next_url)
+        if resp is None:
+            break
+        current_soup = BeautifulSoup(resp.text, "lxml")
+        feed = current_soup.find("div", class_="post-feed")
+        if feed is None:
+            break
+        all_articles.extend(feed.find_all("article", class_="post-card"))
+
+    return page1_soup, all_articles
+
+
+def _build_listing_page(
+    page1_soup: BeautifulSoup,
+    all_articles: list,
+) -> BeautifulSoup:
+    """페이지 1 soup의 post-feed를 전체 article 목록으로 교체."""
+    post_feed = page1_soup.find("div", class_="post-feed")
+    post_feed.clear()
+    for article in all_articles:
+        post_feed.append(article)
+
+    # 포스트 수 업데이트
+    desc = page1_soup.find("h2", class_="site-description")
+    if desc:
+        desc.string = f"A collection of {len(all_articles)} posts"
+
+    # rel="next"/"prev" 제거 (단일 페이지이므로)
+    for rel_val in ("next", "prev"):
+        for link in page1_soup.find_all("link", attrs={"rel": rel_val}):
+            link.decompose()
+
+    return page1_soup
+
+
+# ---------------------------------------------------------------------------
 # 포스트 단위 처리
 # ---------------------------------------------------------------------------
 
@@ -379,7 +483,12 @@ def _process_post(
     )
     output = localizer.localize()
 
-    out_path = target_dir / f"{html_path.stem}.html"
+    # 블로그 홈페이지는 index.html 로 저장
+    if post_url.rstrip("/") == _BLOG_BASE:
+        out_name = "index.html"
+    else:
+        out_name = f"{html_path.stem}.html"
+    out_path = target_dir / out_name
     try:
         out_path.write_text(output, encoding="utf-8")
     except OSError as e:
@@ -434,6 +543,7 @@ def run_html_local(
         pending = sum(1 for url, _ in posts if url not in done_urls)
         if pending == 0:
             print(f"[HTML-LOCAL] {len(posts)}개 포스트 모두 처리 완료, 건너뜀")
+            generate_listing_pages(image_map, slug_map, html_local_dir)
             return
 
     done_lock = threading.Lock()
@@ -469,6 +579,80 @@ def run_html_local(
         label="HTML-LOCAL",
         max_workers=max_workers,
     )
+
+    # 카테고리 목록 페이지 생성
+    generate_listing_pages(image_map, slug_map, html_local_dir)
+
+
+# ---------------------------------------------------------------------------
+# 목록 페이지 생성
+# ---------------------------------------------------------------------------
+
+_BLOG_BASE = "https://blog-ko.lordofheroes.com"
+
+
+def generate_listing_pages(
+    image_map: dict[str, str],
+    slug_map: dict[str, str],
+    html_local_dir: Path = HTML_LOCAL_DIR,
+) -> None:
+    """카테고리 목록 페이지와 홈 인덱스를 서버에서 fetch하여 생성."""
+    ensure_utf8_console()
+    html_local_dir.mkdir(parents=True, exist_ok=True)
+    ASSETS_DIR.mkdir(parents=True, exist_ok=True)
+
+    css_downloader = CssDownloader(ASSETS_DIR)
+    generated = 0
+
+    # 카테고리 목록 페이지
+    for tag_slug, category in TAG_SLUG_TO_CATEGORY.items():
+        tag_url = f"{_BLOG_BASE}/tag/{tag_slug}/"
+        print(f"[LISTING] {category} fetch 시작: {tag_url}")
+
+        result = _fetch_all_articles(tag_url)
+        if result is None:
+            print(f"[LISTING] {category} fetch 실패, 건너뜀")
+            continue
+
+        page1_soup, all_articles = result
+        print(f"[LISTING] {category}: {len(all_articles)}개 포스트 수집")
+
+        combined_soup = _build_listing_page(page1_soup, all_articles)
+
+        localizer = HtmlLocalizer(
+            combined_soup, tag_url, image_map, slug_map,
+            category, css_downloader,
+        )
+        output = localizer.localize()
+
+        target_dir = html_local_dir / category
+        target_dir.mkdir(parents=True, exist_ok=True)
+        (target_dir / "index.html").write_text(output, encoding="utf-8")
+        generated += 1
+
+    # 블로그 홈페이지 전체 목록 → html_local/index_all.html
+    home_url = f"{_BLOG_BASE}/"
+    print(f"[LISTING] 홈페이지 fetch 시작: {home_url}")
+
+    result = _fetch_all_articles(home_url)
+    if result is None:
+        print("[LISTING] 홈페이지 fetch 실패")
+    else:
+        page1_soup, all_articles = result
+        print(f"[LISTING] 홈페이지: {len(all_articles)}개 포스트 수집")
+
+        combined_soup = _build_listing_page(page1_soup, all_articles)
+
+        localizer = HtmlLocalizer(
+            combined_soup, home_url, image_map, slug_map,
+            "", css_downloader,
+        )
+        output = localizer.localize()
+
+        (html_local_dir / "index_all.html").write_text(output, encoding="utf-8")
+        generated += 1
+
+    print(f"[LISTING 완료] {generated}개 목록 페이지 생성")
 
 
 if __name__ == "__main__":
