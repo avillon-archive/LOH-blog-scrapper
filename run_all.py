@@ -16,6 +16,7 @@ Usage:
   python run_all.py --pages --md
   python run_all.py --custom
   python run_all.py --custom --images
+  python run_all.py --html-local
 """
 
 import argparse
@@ -51,6 +52,7 @@ from build_posts_list import (
 from download_images import run_images, _reprocess_fallbacks_cleanup
 from download_md import run_md
 from download_html import run_html
+from download_html_local import run_html_local
 
 ROOT_DIR = Path(__file__).parent / "loh_blog"
 POSTS_FILE = ROOT_DIR / "all_posts.txt"
@@ -60,7 +62,8 @@ CUSTOM_POSTS_FILE = ROOT_DIR / "custom_posts.txt"
 FAILED_IMAGES_FILE = ROOT_DIR / "failed_images.txt"
 FAILED_MD_FILE = ROOT_DIR / "failed_md.txt"
 FAILED_HTML_FILE = ROOT_DIR / "failed_html.txt"
-PIPELINE_ORDER = ("html", "images", "md")
+FAILED_HTML_LOCAL_FILE = ROOT_DIR / "failed_html_local.txt"
+PIPELINE_ORDER = ("html", "images", "md", "html-local")
 HTML_DIR = ROOT_DIR / "html"
 DONE_HTML_FILE = ROOT_DIR / "done_html.txt"
 
@@ -169,6 +172,8 @@ def _load_failed_posts_for_retry(selected: set[str]) -> set[str]:
         targets |= load_failed_post_urls(FAILED_MD_FILE)
     if "html" in selected:
         targets |= load_failed_post_urls(FAILED_HTML_FILE)
+    if "html-local" in selected:
+        targets |= load_failed_post_urls(FAILED_HTML_LOCAL_FILE)
     return targets
 
 
@@ -188,6 +193,8 @@ def _sample_source_label(selected: set[str]) -> str:
         return "failed_md.txt"
     if selected == {"html"}:
         return "failed_html.txt"
+    if selected == {"html-local"}:
+        return "failed_html_local.txt"
 
     labels: list[str] = []
     if "images" in selected:
@@ -196,6 +203,8 @@ def _sample_source_label(selected: set[str]) -> str:
         labels.append("failed_md.txt")
     if "html" in selected:
         labels.append("failed_html.txt")
+    if "html-local" in selected:
+        labels.append("failed_html_local.txt")
     return "union(" + " + ".join(labels) + ")"
 
 
@@ -225,6 +234,7 @@ def main():
     parser.add_argument("--images", action="store_true", help="이미지만 처리")
     parser.add_argument("--md", action="store_true", help="MD만 처리")
     parser.add_argument("--html", action="store_true", help="HTML만 처리")
+    parser.add_argument("--html-local", action="store_true", help="오프라인 열람용 HTML 생성")
     parser.add_argument("--retry", action="store_true", help="실패 목록 재처리")
     parser.add_argument("--retry-multilang", action="store_true",
                         help="KakaoPF 성공 이미지에 multilang alt 보충")
@@ -267,12 +277,14 @@ def main():
     # ── 파이프라인 단계 결정 ────────────────────────────────────────────
     # --retry / --reprocess-fallbacks 는 이미지 전용이므로 images 단계만 선택
     images_only_flags = args.retry or args.reprocess_fallbacks
+    html_local_flag = getattr(args, "html_local", False)
     user_selected = {
         name
         for name, enabled in (
             ("images", args.images or images_only_flags),
             ("md", args.md),
             ("html", args.html),
+            ("html-local", html_local_flag),
         )
         if enabled
     }
@@ -359,7 +371,7 @@ def main():
     # ── 동적 워커 수·rate limit 설정 ──────────────────────────────────
     if args.retry:
         retry_urls: set[str] = set()
-        for fpath in (FAILED_HTML_FILE, FAILED_IMAGES_FILE, FAILED_MD_FILE):
+        for fpath in (FAILED_HTML_FILE, FAILED_IMAGES_FILE, FAILED_MD_FILE, FAILED_HTML_LOCAL_FILE):
             retry_urls |= load_failed_post_urls(fpath)
         post_urls = {url for url, _ in posts}
         effective_count = len(retry_urls & post_urls) or len(posts)
@@ -435,6 +447,14 @@ def main():
             print("━" * 60)
             run_md(posts, retry_mode=args.retry, force_download=force_download,
                    html_index=html_index, max_workers=max_workers)
+        elif step == "html-local":
+            print("▶ 오프라인 열람용 HTML 생성 시작")
+            print("━" * 60)
+            run_html_local(
+                retry_mode=args.retry if html_local_flag else False,
+                force_download=force_download if html_local_flag else False,
+                max_workers=max_workers,
+            )
         print()
 
     elapsed = time.time() - total_start
