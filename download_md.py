@@ -297,11 +297,14 @@ def run_md(
         for url, unmapped in stale.items():
             if unmapped & image_map_keys:
                 refresh_urls.add(url)
-    if refresh_urls:
-        done_urls -= refresh_urls
-        for s in [s for s, u in done_slugs.items() if u in refresh_urls]:
-            del done_slugs[s]
-        print(f"[MD] image_map 갱신으로 {len(refresh_urls)}개 포스트 재생성")
+    if stale:
+        if refresh_urls:
+            done_urls -= refresh_urls
+            for s in [s for s, u in done_slugs.items() if u in refresh_urls]:
+                del done_slugs[s]
+            print(f"[MD] stale {len(stale)}개 중 {len(refresh_urls)}개 포스트 재생성")
+        else:
+            print(f"[MD] stale {len(stale)}개 항목, refresh 대상 없음")
 
     # ── stale 파일 재작성 (처리 중 새로 기록) ──────────────────────────
     STALE_FILE.write_text("", encoding="utf-8")

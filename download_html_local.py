@@ -448,11 +448,14 @@ def run_html_local(
         for url, unmapped in stale.items():
             if unmapped & image_map_keys:
                 refresh_urls.add(url)
-    if refresh_urls:
-        done_urls -= refresh_urls
-        for s in [s for s, u in done_slugs.items() if u in refresh_urls]:
-            del done_slugs[s]
-        print(f"[HTML-LOCAL] image_map 갱신으로 {len(refresh_urls)}개 포스트 재생성")
+    if stale:
+        if refresh_urls:
+            done_urls -= refresh_urls
+            for s in [s for s, u in done_slugs.items() if u in refresh_urls]:
+                del done_slugs[s]
+            print(f"[HTML-LOCAL] stale {len(stale)}개 중 {len(refresh_urls)}개 포스트 재생성")
+        else:
+            print(f"[HTML-LOCAL] stale {len(stale)}개 항목, refresh 대상 없음")
 
     # ── stale 파일 재작성 ──────────────────────────────────────────────
     STALE_FILE.write_text("", encoding="utf-8")
@@ -470,9 +473,6 @@ def run_html_local(
         if pending == 0:
             print(f"[HTML-LOCAL] {len(posts)}개 포스트 모두 처리 완료, 건너뜀")
             stale_buf.flush_all()
-            # 지연 임포트: listing_pages → download_html_local 순환 방지
-            from listing_pages import generate_listing_pages
-            generate_listing_pages(image_map, slug_map, html_local_dir, html_dir)
             return
 
     done_lock = threading.Lock()

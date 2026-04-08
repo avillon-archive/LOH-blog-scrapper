@@ -391,7 +391,7 @@ def main():
         retry_urls: set[str] = set()
         for fpath in (FAILED_HTML_FILE, FAILED_IMAGES_FILE, FAILED_MD_FILE, FAILED_HTML_LOCAL_FILE):
             retry_urls |= load_failed_post_urls(fpath)
-        post_urls = {url for url, _ in posts}
+        post_urls = {url for url, *_ in posts}
         effective_count = len(retry_urls & post_urls) or len(posts)
     else:
         effective_count = len(posts)
