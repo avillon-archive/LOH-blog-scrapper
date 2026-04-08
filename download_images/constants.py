@@ -37,6 +37,7 @@ DL_KEYWORDS = {
 RESOLUTION_RE = re.compile(r"\d+\s*[xX×]\s*\d+")
 GDRIVE_HOSTS = {"drive.google.com", "docs.google.com", "lh3.googleusercontent.com"}
 COMMUNITY_CDN_HOST = "community-ko-cdn.lordofheroes.com"
+GAME_CDN_HOST = "cdn.clovergames.io"
 WAYBACK_CDX_API = "https://web.archive.org/cdx/search/cdx"
 
 _SKIP_LINK_HOSTS = {

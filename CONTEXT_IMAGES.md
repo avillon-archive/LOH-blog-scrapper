@@ -2,6 +2,15 @@
 
 15개 모듈로 분리된 패키지. 주요 진입점: `run_images`, `run_fallback_images`, `backfill_image_map`.
 
+## 단독 실행
+
+```bash
+python -m download_images                    # 전체 이미지 수집
+python -m download_images --retry            # 실패 재처리
+python -m download_images --retry-fallback   # multilang/kakao 폴백
+python -m download_images --backfill-map     # image_map.tsv 누락 보충
+```
+
 ---
 
 ## 락 구조
@@ -16,7 +25,7 @@
 
 URL 정규화: `_clean_img_url(url)` — `_strip_ref_param()` + `clean_url()` 조합. Ghost CMS `ref` 쿼리 파라미터와 `/size/wN` 리사이즈 경로를 수집 시점에서 제거하여 원본 해상도 다운로드.
 
-Google Drive 링크 중 `/spreadsheets/`, `/forms/` 경로와 `_SKIP_LINK_HOSTS` 도메인은 건너뜀.
+`<img>` 수집 대상 호스트: `BLOG_HOST`(`/content/images/` 경로), `COMMUNITY_CDN_HOST`(`community-ko-cdn.lordofheroes.com`), `GAME_CDN_HOST`(`cdn.clovergames.io`). Google Drive 호스트는 `gdrive` 타입으로 별도 수집. `/spreadsheets/`, `/forms/` 경로와 `_SKIP_LINK_HOSTS` 도메인은 건너뜀.
 
 `_detect_non_image_urls(soup, post_url)`: GDrive 앵커 주변에서 BGM/OST 등 비이미지 키워드 감지 시 제외. 검사 범위: ①앵커 텍스트, ②같은 부모 블록 내 이전 sibling(200자), ③content_tag **내부**의 이전 heading. content_tag 외부 heading은 무시.
 

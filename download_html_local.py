@@ -149,6 +149,7 @@ class HtmlLocalizer:
         self._rewrite_images()
         self._rewrite_meta_images()
         self._rewrite_style_bg_images()
+        self._rewrite_anchor_assets()
         self._rewrite_internal_links()
         self._rewrite_home_logo()
         self._fix_youtube_iframes()
@@ -245,7 +246,19 @@ class HtmlLocalizer:
 
         return BG_IMAGE_RE.sub(_replace, css_text)
 
-    # -- 내부 링크 로컬화 --
+    # -- 앵커 링크 로컬화 --
+
+    def _rewrite_anchor_assets(self) -> None:
+        """<a href>가 image_map에 있는 파일을 가리키면 로컬 경로로 치환."""
+        for a in self._soup.find_all("a", href=True):
+            href = a["href"]
+            if not href or not href.startswith("http"):
+                continue
+            abs_href = urllib.parse.urljoin(self._post_url, href)
+            key = clean_url(abs_href)
+            relative_path = self._image_map.get(key)
+            if relative_path:
+                a["href"] = f"{self._prefix}{relative_path}"
 
     def _rewrite_internal_links(self) -> None:
         """블로그 내부 <a href> 를 로컬 html_local 파일 상대경로로 리라이트."""

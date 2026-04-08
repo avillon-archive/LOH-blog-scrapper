@@ -11,6 +11,7 @@ from .constants import (
     COMMUNITY_CDN_HOST,
     DL_KEYWORDS,
     DOWNLOADABLE_EXTS,
+    GAME_CDN_HOST,
     GDRIVE_HOSTS,
     IMG_EXTS,
     RESOLUTION_RE,
@@ -59,7 +60,7 @@ def collect_image_urls(soup: BeautifulSoup, post_url: str) -> list[tuple[str, st
             _add(abs_src, "gdrive")
         elif "/content/images/" in parsed_src.path and hostname == BLOG_HOST:
             _add(abs_src, "img")
-        elif hostname == COMMUNITY_CDN_HOST and path_ext in IMG_EXTS:
+        elif hostname in (COMMUNITY_CDN_HOST, GAME_CDN_HOST) and path_ext in IMG_EXTS:
             _add(abs_src, "img")
 
     for anchor in content_tag.find_all("a", href=True):

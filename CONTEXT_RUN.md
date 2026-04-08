@@ -1,5 +1,25 @@
 # run_all.py
 
+## CLI 옵션
+
+| 플래그 | 설명 |
+|--------|------|
+| (없음) | 전체 파이프라인 실행 (html → images → {md, html-local}) |
+| `--images` | 이미지만 처리 |
+| `--md` | MD만 처리 |
+| `--html` | HTML만 처리 |
+| `--html-local` | 오프라인 열람용 HTML 생성 |
+| `--retry` | 실패 목록 재처리 (원본/Wayback만) |
+| `--retry-fallback` | 실패 이미지 multilang/kakao 폴백 (별도 디렉토리에 보존) |
+| `--posts` | all_posts.txt를 소스로 사용 (사이트맵 갱신 건너뜀) |
+| `--pages` | all_pages.txt를 소스로 사용 (사이트맵 갱신 건너뜀) |
+| `--custom` | custom_posts.txt를 소스로 사용 (사이트맵 갱신 건너뜀) |
+| `--force` | 기존 기록 무시, 전체 재다운로드 |
+| `--sample N` | 랜덤 샘플 (행 수의 10% 상한) |
+| `--seed N` | 샘플링 고정 시드 |
+
+---
+
 ## HTML 항상 실행
 
 `selected = user_selected | {"html"}` — `--images`나 `--md`만 지정해도 HTML 포함. 단, 사용자가 `--html`을 명시하지 않으면 HTML 단계에 `retry_mode`/`force_download`를 전달하지 않음 (보조 단계).
