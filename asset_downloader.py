@@ -7,12 +7,11 @@ import threading
 import urllib.parse
 from pathlib import Path
 
+from config import BLOG_IMAGE_PREFIX as _BLOG_IMAGE_PREFIX
 from utils import fetch_with_retry
 
 # CSS url(...) 참조 패턴
 CSS_URL_RE = re.compile(r"""url\(\s*['"]?([^'")]+)['"]?\s*\)""")
-
-_BLOG_IMAGE_PREFIX = "https://blog-ko.lordofheroes.com/content/images/"
 
 
 # ---------------------------------------------------------------------------

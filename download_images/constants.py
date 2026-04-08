@@ -3,8 +3,30 @@
 
 import re
 
-from utils import BLOG_HOST, ROOT_DIR, SIZE_W_RE  # noqa: F401 – re-export
+from config import (  # noqa: F401 — re-export for submodule consumers
+    ARCHIVE_EXTS,
+    BLOG_HOST,
+    COMMUNITY_CDN_HOST,
+    DL_KEYWORDS,
+    DOWNLOADABLE_EXTS,
+    EN_CAT_NORMALIZE,
+    GAME_CDN_HOST,
+    GDRIVE_HOSTS,
+    IMG_EXTS,
+    JA_CAT_NORMALIZE,
+    KAKAO_PF_API,
+    KAKAO_PF_PROFILE,
+    KO_TO_LANG_CAT,
+    MULTILANG_BLOG_HOSTS,
+    MULTILANG_EARLIEST_DATE,
+    NON_IMAGE_CONTEXT_KEYWORDS as _NON_IMAGE_CONTEXT_KEYWORDS,
+    ROOT_DIR,
+    SKIP_LINK_HOSTS as _SKIP_LINK_HOSTS,
+    WAYBACK_CDX_API,
+)
+from utils import SIZE_W_RE  # noqa: F401 – re-export
 
+# ── ROOT_DIR 기반 경로 파생 ───────────────────────────────────────────────
 IMAGES_DIR = ROOT_DIR / "images"
 DONE_FILE = ROOT_DIR / "downloaded_urls.txt"
 DONE_POSTS_FILE = ROOT_DIR / "done_posts_images.txt"
@@ -27,52 +49,10 @@ FALLBACK_IMG_HASH_FILE = ROOT_DIR / "fallback_image_hashes.tsv"
 FALLBACK_MULTILANG_LOG_FILE = FALLBACK_IMAGES_DIR / "multilang_fallback.tsv"
 FALLBACK_KAKAO_PF_LOG_FILE = FALLBACK_IMAGES_DIR / "kakao_pf_log.tsv"
 
-IMG_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg"}
-ARCHIVE_EXTS = {".zip", ".rar", ".7z", ".tar", ".gz", ".tgz"}
-DOWNLOADABLE_EXTS = IMG_EXTS | ARCHIVE_EXTS
-DL_KEYWORDS = {
-    "다운로드", "download", "다운", "받기", "저장",
-    "고화질 이미지", "고화질", "이미지", "원본",
-}
+# ── 구현 수준 상수 (TOML 불필요) ──────────────────────────────────────────
 RESOLUTION_RE = re.compile(r"\d+\s*[xX×]\s*\d+")
-GDRIVE_HOSTS = {"drive.google.com", "docs.google.com", "lh3.googleusercontent.com"}
-COMMUNITY_CDN_HOST = "community-ko-cdn.lordofheroes.com"
-GAME_CDN_HOST = "cdn.clovergames.io"
-WAYBACK_CDX_API = "https://web.archive.org/cdx/search/cdx"
-
-_SKIP_LINK_HOSTS = {
-    "forms.gle", "forms.google.com", "play.google.com", "apps.apple.com",
-    "go.onelink.me",
-}
-
-_NON_IMAGE_CONTEXT_KEYWORDS = {"bgm", "ost", "음악", "사운드트랙", "soundtrack"}
-
-MULTILANG_BLOG_HOSTS = {
-    "en": "blog-en.lordofheroes.com",
-    "ja": "blog-ja.lordofheroes.com",
-}
-MULTILANG_EARLIEST_DATE = {"en": "2020-10-20", "ja": "2021-01-15"}
 _KO_SUFFIX_RE = re.compile(r"(?i)_ko(?=[\._\-])")
 _LANG_SUFFIX_MAP = {"en": "_EN", "ja": "_JP"}
-
-# EN/JA 카테고리 정규화 (개편으로 인한 잔존 태그 통합)
-EN_CAT_NORMALIZE = {"New Hero": "Universe", "avillontoon": "Gallery"}
-JA_CAT_NORMALIZE = {"漫画": "ユニバース", "Event-Completed": "イベント"}
-
-# KO → EN/JA 카테고리 매핑
-KO_TO_LANG_CAT: dict[str, dict[str, str]] = {
-    "en": {
-        "공지사항": "Notice", "이벤트": "Event", "쿠폰": "Coupon",
-        "유니버스": "Universe", "갤러리": "Gallery", "아발론서고": "Gallery",
-    },
-    "ja": {
-        "공지사항": "お知らせ", "이벤트": "イベント", "쿠폰": "クーポン",
-        "유니버스": "英雄紹介", "갤러리": "ユニバース", "아발론서고": "ユニバース",
-    },
-}
-
-KAKAO_PF_PROFILE = "_YXZqxb"
-KAKAO_PF_API = f"https://pf.kakao.com/rocket-web/web/profiles/{KAKAO_PF_PROFILE}/posts"
 
 _ARCHIVE_CONTENT_TYPES = {
     "application/zip", "application/x-zip-compressed",

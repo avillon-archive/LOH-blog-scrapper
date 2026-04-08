@@ -9,38 +9,14 @@ from pathlib import Path
 
 from bs4 import BeautifulSoup
 
+from config import MULTILANG_CONFIGS, ROOT_DIR, SITEMAP_PAGES_URL, SITEMAP_URL
 from utils import build_html_index, fetch_with_retry, load_posts
 
-SITEMAP_URL = "https://blog-ko.lordofheroes.com/sitemap-posts.xml"
-SITEMAP_PAGES_URL = "https://blog-ko.lordofheroes.com/sitemap-pages.xml"
-ROOT_DIR = Path(__file__).parent / "loh_blog"
 OUTPUT_FILE = ROOT_DIR / "all_posts.txt"
 PAGES_OUTPUT_FILE = ROOT_DIR / "all_pages.txt"
 LINKS_OUTPUT_FILE = ROOT_DIR / "all_links.txt"
 HTML_DIR = ROOT_DIR / "html"
 DONE_HTML_FILE = ROOT_DIR / "done_html.txt"
-
-# EN/JA 사이트맵 및 출력 경로
-MULTILANG_CONFIGS: dict[str, dict[str, str | Path]] = {
-    "en": {
-        "sitemap_posts": "https://blog-en.lordofheroes.com/sitemap-posts.xml",
-        "sitemap_pages": "https://blog-en.lordofheroes.com/sitemap-pages.xml",
-        "all_posts": ROOT_DIR / "all_posts_en.txt",
-        "all_pages": ROOT_DIR / "all_pages_en.txt",
-        "all_links": ROOT_DIR / "all_links_en.txt",
-        "html_dir": ROOT_DIR / "html_en",
-        "done_html": ROOT_DIR / "done_html_en.txt",
-    },
-    "ja": {
-        "sitemap_posts": "https://blog-ja.lordofheroes.com/sitemap-posts.xml",
-        "sitemap_pages": "https://blog-ja.lordofheroes.com/sitemap-pages.xml",
-        "all_posts": ROOT_DIR / "all_posts_ja.txt",
-        "all_pages": ROOT_DIR / "all_pages_ja.txt",
-        "all_links": ROOT_DIR / "all_links_ja.txt",
-        "html_dir": ROOT_DIR / "html_ja",
-        "done_html": ROOT_DIR / "done_html_ja.txt",
-    },
-}
 
 # Date extractor from <lastmod> values.
 DATE_RE = re.compile(r"(\d{4}-\d{2}-\d{2})")

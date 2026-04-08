@@ -13,11 +13,8 @@ from pathlib import Path
 from bs4 import BeautifulSoup
 
 from asset_downloader import CssDownloader, SiteImageDownloader
-from download_html_local import (
-    TAG_SLUG_TO_CATEGORY,
-    HtmlLocalizer,
-    _BLOG_BASE,
-)
+from config import BLOG_BASE as _BLOG_BASE, TAG_SLUG_TO_CATEGORY
+from download_html_local import HtmlLocalizer
 from utils import (
     ROOT_DIR,
     build_html_index,

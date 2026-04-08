@@ -32,9 +32,11 @@
 
 ## 동적 워커·rate limit
 
+기본값은 `config.py`(`[network]` 섹션)에서 관리. 배치 크기에 따라 동적 조정:
+
 ```
-posts ≤ 100건: workers = min(len(posts), 32), rate_limit = 20 req/s
-posts > 100건: workers = 8, rate_limit = 10 req/s
+posts ≤ 100건: workers = min(len(posts), 32), rate_limit = blog_rate_limit_small (기본 20 req/s)
+posts > 100건: workers = default_max_workers (기본 8), rate_limit = blog_rate_limit (기본 10 req/s)
 ```
 
 ## 사이트맵 갱신

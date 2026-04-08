@@ -6,6 +6,16 @@
 
 ---
 
+## 설정 (`config.py` / `config.default.toml`)
+
+모든 설정 상수는 `config.py`에서 중앙 관리. TOML 로딩 우선순위: `config.toml` → `config.default.toml` → 하드코딩 기본값.
+
+`config.py`는 stdlib만 사용 (`tomllib`, `re`, `pathlib`) → 순환 import 없음. 다른 모듈은 `config`에서 직접 import하거나 `utils.py`/`download_images/constants.py`의 re-export를 통해 접근.
+
+TOML 섹션: `[paths]`, `[network]`, `[urls]`, `[categories]`, `[file_types]`. `blog_base`, `sitemap URL`, `BLOG_HOST_RE` 등은 `blog_host`에서 파생. `TAG_SLUG_TO_CATEGORY`, `KO_TO_LANG_CAT`는 `[categories.tags]`에서 자동 생성.
+
+---
+
 ## 파이프라인
 
 의존 관계: **html → images → {md, html-local}**. md와 html-local은 상호 의존 없음 (둘 다 `image_map.tsv`를 참조).

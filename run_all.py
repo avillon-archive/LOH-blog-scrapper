@@ -28,6 +28,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
+from config import MULTILANG_CONFIGS, ROOT_DIR, SITEMAP_PAGES_URL, SITEMAP_URL
 from utils import (
     BLOG_RATE_LIMIT_SMALL,
     DEFAULT_MAX_WORKERS,
@@ -48,16 +49,11 @@ from build_posts_list import (
     fetch_newest_sitemap_date,
     fetch_newest_single_sitemap_date,
     fill_published_times,
-    MULTILANG_CONFIGS,
-    SITEMAP_URL,
-    SITEMAP_PAGES_URL,
 )
 from download_images import run_images, run_fallback_images
 from download_md import run_md
 from download_html import run_html
 from download_html_local import run_html_local
-
-ROOT_DIR = Path(__file__).parent / "loh_blog"
 POSTS_FILE = ROOT_DIR / "all_posts.txt"
 PAGES_FILE = ROOT_DIR / "all_pages.txt"
 LINKS_FILE = ROOT_DIR / "all_links.txt"

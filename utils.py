@@ -13,6 +13,18 @@ from typing import TYPE_CHECKING, Callable
 
 import requests
 
+from config import (  # noqa: E402 — 중앙 설정에서 re-export
+    BLOG_HOST,
+    BLOG_RATE_LIMIT,
+    BLOG_RATE_LIMIT_SMALL,
+    DEFAULT_MAX_WORKERS,
+    DEFAULT_TIMEOUT,
+    MAX_RETRIES,
+    RETRY_DELAYS,
+    ROOT_DIR,
+    VALID_CATEGORIES,
+)
+
 if TYPE_CHECKING:
     from bs4 import BeautifulSoup
 
@@ -25,20 +37,6 @@ _file_lock = threading.Lock()
 shutdown_event = threading.Event()          # 전역 중단 신호
 _line_buffers: list["LineBuffer"] = []      # LineBuffer 레지스트리
 _line_buffers_lock = threading.Lock()
-
-# Default number of parallel workers for ThreadPoolExecutor.
-DEFAULT_MAX_WORKERS: int = 8
-
-# 모든 출력 데이터의 루트 디렉터리.
-ROOT_DIR: Path = Path(__file__).parent / "loh_blog"
-
-# ---------------------------------------------------------------------------
-# 블로그 도메인 Rate Limiter (토큰 버킷)
-# ---------------------------------------------------------------------------
-
-BLOG_HOST: str = "blog-ko.lordofheroes.com"
-BLOG_RATE_LIMIT: float = 10.0        # 대규모 배치 (>100건) 초당 최대 요청
-BLOG_RATE_LIMIT_SMALL: float = 20.0  # 소규모 배치 (≤100건) 초당 최대 요청
 
 
 class _TokenBucket:
@@ -83,15 +81,6 @@ USER_AGENT = (
 
 # Thread-local session holder for thread-safe connection pooling.
 _session_local = threading.local()
-
-# ---------------------------------------------------------------------------
-# 카테고리 관련 상수·헬퍼
-# ---------------------------------------------------------------------------
-
-VALID_CATEGORIES: frozenset[str] = frozenset([
-    "공지사항", "이벤트", "갤러리", "유니버스", "아발론서고",
-    "쿠폰", "아발론 이벤트", "Special", "가이드", "확률 정보",
-])
 
 
 def extract_category(soup: "BeautifulSoup") -> str:
@@ -231,17 +220,17 @@ def ensure_utf8_console():
 
 
 def fetch_with_retry(
-    url: str, method: str = "GET", timeout: int = 20, **kwargs
+    url: str, method: str = "GET", timeout: int = DEFAULT_TIMEOUT, **kwargs
 ) -> "requests.Response | None":
     """
-    Retry request up to 3 times with backoff (1s, 2s).
+    Retry request up to MAX_RETRIES times with backoff (RETRY_DELAYS).
     Return response on success, None on failure.
     Stop immediately on 404/410.
     HTTP 429 는 Retry-After 를 존중하며 retry 횟수를 소모하지 않는다.
     블로그 도메인 요청은 토큰 버킷 rate limiter 를 거친다.
     """
-    delays = [1, 2]
-    max_retries = 3
+    delays = RETRY_DELAYS
+    max_retries = MAX_RETRIES
     is_blog = urllib.parse.urlparse(url).hostname == BLOG_HOST
     attempt = 0
     while attempt < max_retries:

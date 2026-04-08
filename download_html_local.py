@@ -16,6 +16,7 @@ from pathlib import Path
 from bs4 import BeautifulSoup
 
 from asset_downloader import CssDownloader, SiteImageDownloader
+from config import BLOG_BASE as _BLOG_BASE, BLOG_HOST_RE, TAG_SLUG_TO_CATEGORY
 from utils import (
     DEFAULT_MAX_WORKERS,
     ROOT_DIR,
@@ -45,24 +46,7 @@ BG_IMAGE_RE = re.compile(
     re.IGNORECASE,
 )
 
-_BLOG_BASE = "https://blog-ko.lordofheroes.com"
-
-# 블로그 내부 경로 패턴
-BLOG_HOST_RE = re.compile(
-    r"^https?://blog-ko\.lordofheroes\.com(/.*)?$",
-    re.IGNORECASE,
-)
-
 _EXCLUDED_PATHS = frozenset(("tag", "author", "rss", "assets", "content", "public"))
-
-TAG_SLUG_TO_CATEGORY: dict[str, str] = {
-    "notices": "공지사항",
-    "events": "이벤트",
-    "gallery": "갤러리",
-    "universe": "유니버스",
-    "library": "아발론서고",
-    "coupon": "쿠폰",
-}
 
 
 # ---------------------------------------------------------------------------
