@@ -109,11 +109,29 @@ def extract_category(soup: "BeautifulSoup") -> str:
 
 
 SIZE_W_RE = re.compile(r"/size/w\d+", re.IGNORECASE)
+_CLOVERGAMES_PREVIEW_RE = re.compile(
+    r"(cdn\.clovergames\.io/image/loh/[a-z]{2})/p/",
+)
+
+
+def _strip_ref_param(url: str) -> str:
+    """URL에서 ref 쿼리 파라미터를 제거한다 (Ghost CMS 참조 추적용)."""
+    parsed = urllib.parse.urlparse(url)
+    if not parsed.query:
+        return url
+    params = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
+    if "ref" not in params:
+        return url
+    params.pop("ref")
+    new_query = urllib.parse.urlencode(params, doseq=True)
+    return urllib.parse.urlunparse(parsed._replace(query=new_query))
 
 
 def clean_url(url: str) -> str:
-    """Normalize URL for dedup: remove /size/wN and trailing slash."""
+    """Normalize URL for dedup: ref 제거, /size/wN 제거, /p/→/o/, trailing slash."""
+    url = _strip_ref_param(url)
     url = SIZE_W_RE.sub("", url)
+    url = _CLOVERGAMES_PREVIEW_RE.sub(r"\1/o/", url)
     return url.rstrip("/")
 
 

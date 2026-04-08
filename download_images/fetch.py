@@ -18,7 +18,7 @@ from .constants import (
 )
 from .models import PostSoupCache
 from .state import _wayback_cache, _wayback_cache_lock, _wayback_events
-from .url_utils import _normalized_link_key, _strip_ref_param
+from .url_utils import _normalized_link_key
 
 
 # ---------------------------------------------------------------------------
@@ -32,7 +32,6 @@ def _wayback_oldest(url: str) -> str | None:
     동일 URL에 대해 여러 스레드가 동시에 CDX 요청을 보내는 것을 방지하기 위해
     이벤트 기반 대기를 사용한다.
     """
-    url = _strip_ref_param(url)
     with _wayback_cache_lock:
         if url in _wayback_cache:
             return _wayback_cache[url]

@@ -23,7 +23,7 @@ python -m download_images --backfill-map     # image_map.tsv 누락 보충
 
 ## 이미지 수집 (`collect_image_urls`)
 
-URL 정규화: `_clean_img_url(url)` — `_strip_ref_param()` + `clean_url()` 조합. Ghost CMS `ref` 쿼리 파라미터와 `/size/wN` 리사이즈 경로를 수집 시점에서 제거하여 원본 해상도 다운로드.
+URL 정규화: `clean_url()` (utils.py)이 모든 정규화를 담당. Ghost CMS `?ref=` 파라미터 제거, `/size/wN` 리사이즈 경로 제거, clovergames CDN `/p/`→`/o/` 변환(프리뷰→원본), trailing slash 제거. `_clean_img_url(url)`은 `clean_url()`의 얇은 래퍼.
 
 `<img>` 수집 대상 호스트: `BLOG_HOST`(`/content/images/` 경로), `COMMUNITY_CDN_HOST`(`community-ko-cdn.lordofheroes.com`), `GAME_CDN_HOST`(`cdn.clovergames.io`). Google Drive 호스트는 `gdrive` 타입으로 별도 수집. `/spreadsheets/`, `/forms/` 경로와 `_SKIP_LINK_HOSTS` 도메인은 건너뜀.
 
@@ -81,7 +81,7 @@ score > 0 → confirmed, score == 0 → unconfirmed.
 
 ## Wayback 캐시
 
-- `_wayback_oldest(url)`: CDX API, `_strip_ref_param()` 적용 후 조회. 동일 URL 동시 요청 시 `_wayback_events`로 선착 스레드만 fetch, 나머지 대기 후 캐시 사용.
+- `_wayback_oldest(url)`: CDX API 조회. 입력 URL은 `collect` 단계에서 이미 정규화됨. 동일 URL 동시 요청 시 `_wayback_events`로 선착 스레드만 fetch, 나머지 대기 후 캐시 사용.
 - `_fetch_wayback_post_soup`: `resp.encoding = resp.apparent_encoding or "utf-8"`로 인코딩 보정 (Wayback 래퍼의 부정확한 헤더 대응).
 - `_fetch_wayback_gdrive_from_post`: `src` 및 `data-src` 모두 확인 (lazy-load 이미지가 Wayback 스냅샷에 `data-src`로만 남는 경우).
 

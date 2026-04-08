@@ -1,5 +1,11 @@
 # utils.py
 
+## URL 정규화
+
+`clean_url(url)`: 모든 URL 정규화의 단일 진입점. 적용 순서: ①`?ref=` 파라미터 제거 (Ghost CMS 추적용), ②`/size/wN` 경로 제거 (원본 해상도 확보), ③clovergames CDN `/p/`→`/o/` 변환 (프리뷰→원본), ④trailing slash 제거. `image_map.tsv` 키 생성, html_local 이미지/앵커 리라이트 모두 이 함수를 경유.
+
+---
+
 ## 네트워크
 
 - 블로그 도메인 요청은 `_TokenBucket` rate limiter 통과 (대규모 >100건: 10 req/s, 소규모 ≤100건: 20 req/s).

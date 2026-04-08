@@ -11,22 +11,9 @@ from utils import SIZE_W_RE, clean_url
 from .constants import COMMUNITY_CDN_HOST
 
 
-def _strip_ref_param(url: str) -> str:
-    """URL에서 ref 쿼리 파라미터를 제거한다 (Ghost CMS 참조 추적용)."""
-    parsed = urllib.parse.urlparse(url)
-    if not parsed.query:
-        return url
-    params = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
-    if "ref" not in params:
-        return url
-    params.pop("ref")
-    new_query = urllib.parse.urlencode(params, doseq=True)
-    return urllib.parse.urlunparse(parsed._replace(query=new_query))
-
-
 def _clean_img_url(url: str) -> str:
-    """이미지 URL 정규화: ref 파라미터 제거 + clean_url."""
-    return clean_url(_strip_ref_param(url))
+    """이미지 URL 정규화: clean_url (ref 제거 + /size/wN + /p/→/o/ 포함)."""
+    return clean_url(url)
 
 
 def _seen_scope(utype: str) -> str:
