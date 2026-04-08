@@ -30,8 +30,10 @@ Google Drive 링크 중 `/spreadsheets/`, `/forms/` 경로와 `_SKIP_LINK_HOSTS`
 |------|-------|-------|-------|
 | `img` / `og_image` | 직접 + CT 검증 | Wayback `im_` | Wayback 포스트 스냅샷에서 img/og:image 탐색 |
 | `gdrive` | 직접 (min 500B) | Wayback `im_` | Wayback 포스트 스냅샷에서 img 탐색 |
-| `linked_keyword` | 직접 + CT 검증 (아카이브 허용) | Wayback `im_` (아카이브 허용) | Wayback 포스트 스냅샷에서 `<a>` 탐색 (아카이브 허용) |
-| `linked_direct` | 직접 + CT 또는 확장자 (아카이브 허용) | community CDN만 Wayback `im_` | - |
+| `linked_keyword` | 직접 + CT 검증 | Wayback `im_` | Wayback 포스트 스냅샷에서 `<a>` 탐색 |
+| `linked_direct` | 직접 + CT 또는 확장자 | community CDN만 Wayback `im_` | - |
+
+> `linked_keyword`·`linked_direct`는 모든 단계에서 압축 파일(zip, rar, 7z 등)도 허용한다.
 
 ### 확장 폴백 (`--retry-fallback` 전용)
 
@@ -47,9 +49,9 @@ Kakao PF API(`pf.kakao.com`, 프로필 `_YXZqxb`)에서 인증 없이 게시글 
 
 ---
 
-## 다국어 Wayback 폴백
+## 다국어 Wayback 폴백 (`--retry-fallback` 전용)
 
-EN/JA `all_links_{lang}.txt`에서 published_date 기반 인덱스 구축. 캐시: `multilang_published_index.json` (all_links + html_dir mtime 비교로 갱신 판단).
+EN/JA `all_links_{lang}.txt`에서 published_date 기반 인덱스 구축. `--retry-fallback` 실행 시에만 EN/JA HTML 다운로드·인덱스 구축이 수행된다. 캐시: `multilang_published_index.json` (all_links + html_dir mtime 비교로 갱신 판단).
 
 ### 후보 스코어링
 

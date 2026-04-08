@@ -423,32 +423,35 @@ def main():
             build_links_and_write()
 
             # EN/JA 포스트 목록 생성 + HTML 다운로드
-            print()
-            print("▶ EN/JA HTML 파일 저장 시작")
-            print("━" * 60)
-            build_multilang_and_write()
-            for lang, cfg in MULTILANG_CONFIGS.items():
-                lang_links = load_posts(cfg["all_links"])
-                if not lang_links:
-                    print(f"  [{lang.upper()}] 포스트 목록 없음, 건너뜀")
-                    continue
-                failed_file = cfg["done_html"].parent / f"failed_html_{lang}.txt"
-                run_html(lang_links,
-                         retry_mode=args.retry if html_is_primary else False,
-                         force_download=force_download if html_is_primary else False,
-                         max_workers=max_workers,
-                         html_dir=cfg["html_dir"],
-                         done_file=cfg["done_html"],
-                         failed_file=failed_file)
-                fill_published_times(cfg["all_posts"], cfg["html_dir"], cfg["done_html"])
-                fill_published_times(cfg["all_pages"], cfg["html_dir"], cfg["done_html"])
-                _build_multilang_links(cfg)
+            # (전체 파이프라인·--html·--retry-fallback 에서만 필요)
+            if html_is_primary or args.retry_fallback:
+                print()
+                print("▶ EN/JA HTML 파일 저장 시작")
+                print("━" * 60)
+                build_multilang_and_write()
+                for lang, cfg in MULTILANG_CONFIGS.items():
+                    lang_links = load_posts(cfg["all_links"])
+                    if not lang_links:
+                        print(f"  [{lang.upper()}] 포스트 목록 없음, 건너뜀")
+                        continue
+                    failed_file = cfg["done_html"].parent / f"failed_html_{lang}.txt"
+                    run_html(lang_links,
+                             retry_mode=args.retry if html_is_primary else False,
+                             force_download=force_download if html_is_primary else False,
+                             max_workers=max_workers,
+                             html_dir=cfg["html_dir"],
+                             done_file=cfg["done_html"],
+                             failed_file=failed_file)
+                    fill_published_times(cfg["all_posts"], cfg["html_dir"], cfg["done_html"])
+                    fill_published_times(cfg["all_pages"], cfg["html_dir"], cfg["done_html"])
+                    _build_multilang_links(cfg)
 
-            # KO + EN/JA 통합 html_index 구축
+            # html_index 구축 (EN/JA 는 위 블록 실행 시에만 포함)
             html_index = build_html_index(HTML_DIR, DONE_HTML_FILE)
-            for _lang, cfg in MULTILANG_CONFIGS.items():
-                lang_idx = build_html_index(cfg["html_dir"], cfg["done_html"])
-                html_index.update(lang_idx)
+            if html_is_primary or args.retry_fallback:
+                for _lang, cfg in MULTILANG_CONFIGS.items():
+                    lang_idx = build_html_index(cfg["html_dir"], cfg["done_html"])
+                    html_index.update(lang_idx)
         elif step == "images":
             print("▶ 이미지 다운로드 시작")
             print("━" * 60)
