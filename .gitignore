@@ -3,6 +3,7 @@ __pycache__/
 .venv
 .claude/*.json
 .vscode/
+.editorconfig
 *.pyc
 *.pyo
 .env
