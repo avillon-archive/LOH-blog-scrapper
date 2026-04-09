@@ -2,6 +2,7 @@
 """포스트 단위 처리 (원본 다운로드 / 폴백 보존)."""
 
 import time
+import urllib.parse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
@@ -15,6 +16,7 @@ from utils import (
 )
 
 from .collect import _detect_non_image_urls, collect_image_urls
+from .fetch import _get_content_tag
 from .constants import (
     FALLBACK_IMAGES_DIR,
     IMAGES_DIR,
@@ -138,6 +140,7 @@ def process_post_fallback(
     multilang_date_index: dict[str, list[tuple[str, str]]] | None = None,
     kakao_pf_index: dict[str, list[KakaoPFPost]] | None = None,
     published_time: str = "",
+    failed_img_urls: set[str] | None = None,
 ) -> PostProcessResult:
     """실패 이미지에 대해 multilang/kakao 폴백을 시도해 별도 디렉토리에 보존한다.
 
@@ -164,6 +167,19 @@ def process_post_fallback(
     date_folder = date_to_folder(post_date)
     folder = FALLBACK_IMAGES_DIR / (category or "etc") / date_folder
 
+    # Phase B용 content <img> DOM 위치 맵 (Phase B와 동일 필터링)
+    _content_img_pos: dict[str, int] = {}
+    _cpos = 0
+    for _img in _get_content_tag(soup).find_all("img"):
+        if "author-profile-image" in (_img.get("class") or []):
+            continue
+        if _img.find_parent("div", class_="author-card"):
+            continue
+        _src = _img.get("src") or _img.get("data-src") or ""
+        if _src:
+            _cpos += 1
+            _content_img_pos[_clean_img_url(urllib.parse.urljoin(post_url, _src))] = _cpos
+
     ok_saved = 0
     ok_kakao = 0
     ok_multilang = 0
@@ -171,6 +187,9 @@ def process_post_fallback(
 
     for idx, (img_url, utype) in enumerate(images, start=1):
         if utype == "linked_direct":
+            continue
+
+        if failed_img_urls is not None and _clean_img_url(img_url) not in failed_img_urls:
             continue
 
         seen_key = _seen_key(utype, img_url)
@@ -188,20 +207,22 @@ def process_post_fallback(
 
         multilang_result = None
         if multilang_date_index:
+            content_img_idx = _content_img_pos.get(_clean_img_url(img_url))
             multilang_result = _fetch_multilang_wayback_image(
                 post_url, img_url, post_date, utype, idx,
                 multilang_date_index, post_soup_cache,
                 published_time=published_time,
                 ko_lastmod=post_date,
                 ko_category=category,
+                content_img_idx=content_img_idx,
             )
 
         if kakao_result is None and multilang_result is None:
             continue
 
         # ── 결과 선택: 큰 쪽 primary, 작은 쪽 alt ────────────────────────
-        primary: tuple[bytes, str, str, str, str] | None = None
-        alt: tuple[bytes, str, str, str, str] | None = None
+        primary: tuple[bytes, str, str, str, str, str] | None = None
+        alt: tuple[bytes, str, str, str, str, str] | None = None
 
         if kakao_result and multilang_result:
             if len(kakao_result[0]) >= len(multilang_result[0]):
@@ -214,7 +235,7 @@ def process_post_fallback(
             primary = multilang_result
 
         # ── primary 저장 ─────────────────────────────────────────────────
-        p_content, p_final_url, p_ctype, p_cd, p_source = primary  # type: ignore[misc]
+        p_content, p_final_url, p_ctype, p_cd, p_source, p_phase = primary  # type: ignore[misc]
         p_hash = _sha256_bytes(p_content)
 
         with _state_lock:
@@ -250,33 +271,33 @@ def process_post_fallback(
         _fb_img_hash_buf.add(f"{p_hash}\t{p_rel}\t")
 
         if p_source.startswith("http://pf.kakao.com/"):
-            _fb_kakao_pf_log_buf.add(f"{p_rel}\t{post_url}\t{p_source}\t{img_url}")
+            _fb_kakao_pf_log_buf.add(f"{p_rel}\t{post_url}\t{p_source}\t{img_url}\t{p_phase}")
             ok_kakao += 1
         else:
-            _fb_multilang_log_buf.add(f"{p_rel}\t{post_url}\t{p_source}\t{img_url}")
+            _fb_multilang_log_buf.add(f"{p_rel}\t{post_url}\t{p_source}\t{img_url}\t{p_phase}")
             ok_multilang += 1
         ok_saved += 1
 
         # ── alt 저장 (있으면) ────────────────────────────────────────────
         if alt is not None:
-            a_content = alt[0]
+            a_content, _, a_ctype, a_cd, a_source, a_phase = alt
             a_hash = _sha256_bytes(a_content)
             if a_hash != p_hash:
                 a_filename = _determine_filename(
-                    utype, img_url, alt[1], alt[2], alt[3], idx
+                    utype, img_url, alt[1], a_ctype, a_cd, idx
                 )
-                a_tag = _source_tag(alt[4])
+                a_tag = _source_tag(a_source)
                 a_rel = _save_alternative_image(
                     a_content, a_filename, folder,
                     source_tag=a_tag, root_dir=ROOT_DIR,
                 )
                 if a_rel:
-                    if alt[4].startswith("http://pf.kakao.com/"):
+                    if a_source.startswith("http://pf.kakao.com/"):
                         _fb_kakao_pf_log_buf.add(
-                            f"{a_rel}\t{post_url}\t{alt[4]}\t{img_url}")
+                            f"{a_rel}\t{post_url}\t{a_source}\t{img_url}\t{a_phase}")
                     else:
                         _fb_multilang_log_buf.add(
-                            f"{a_rel}\t{post_url}\t{alt[4]}\t{img_url}")
+                            f"{a_rel}\t{post_url}\t{a_source}\t{img_url}\t{a_phase}")
 
     return PostProcessResult(
         ok=ok_saved, fail=0, post_fetch_ok=True,

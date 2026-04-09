@@ -14,8 +14,10 @@ from config import (  # noqa: F401 — re-export for submodule consumers
     GDRIVE_HOSTS,
     IMG_EXTS,
     JA_CAT_NORMALIZE,
+    IMAGE_OVERRIDES,
     KAKAO_PF_API,
     KAKAO_PF_PROFILE,
+    KAKAO_TITLE_SIMILARITY,
     KO_TO_LANG_CAT,
     MULTILANG_BLOG_HOSTS,
     MULTILANG_EARLIEST_DATE,
@@ -46,6 +48,7 @@ FALLBACK_IMAGE_MAP_FILE = ROOT_DIR / "fallback_image_map.tsv"
 FALLBACK_IMG_HASH_FILE = ROOT_DIR / "fallback_image_hashes.tsv"
 FALLBACK_MULTILANG_LOG_FILE = ROOT_DIR / "fallback_multilang.tsv"
 FALLBACK_KAKAO_PF_LOG_FILE = ROOT_DIR / "fallback_kakao_pf.tsv"
+FALLBACK_STILL_FAILED_FILE = ROOT_DIR / "fallback_still_failed.tsv"
 
 # ── 구현 수준 상수 (TOML 불필요) ──────────────────────────────────────────
 RESOLUTION_RE = re.compile(r"\d+\s*[xX×]\s*\d+")

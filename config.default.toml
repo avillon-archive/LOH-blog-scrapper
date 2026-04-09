@@ -31,6 +31,7 @@ game = "cdn.clovergames.io"
 [urls.kakao]
 profile_id = "_YXZqxb"
 # api URL 은 profile_id 에서 파생
+title_similarity_threshold = 0.55
 
 [urls.multilang.en]
 blog_host = "blog-en.lordofheroes.com"
@@ -87,6 +88,11 @@ avillontoon = "Gallery"
 [categories.normalize.ja]
 "漫画" = "ユニバース"
 "Event-Completed" = "イベント"
+
+# ── 이미지 오버라이드 ─────────────────────────────────────────────────────
+[image_overrides]
+# 영구 깨진 URL = "동일 이미지의 블로그 URL"
+# "https://lh3.googleusercontent.com/broken..." = "https://blog-ko.lordofheroes.com/content/images/..."
 
 # ── 파일 타입 ─────────────────────────────────────────────────────────────
 [file_types]

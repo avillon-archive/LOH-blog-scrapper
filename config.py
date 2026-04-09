@@ -71,6 +71,7 @@ KAKAO_PF_PROFILE: str = _kakao.get("profile_id", "_YXZqxb")
 KAKAO_PF_API: str = (
     f"https://pf.kakao.com/rocket-web/web/profiles/{KAKAO_PF_PROFILE}/posts"
 )
+KAKAO_TITLE_SIMILARITY: float = _kakao.get("title_similarity_threshold", 0.55)
 
 # ── 다국어 ────────────────────────────────────────────────────────────────
 _DEFAULT_MULTILANG = {
@@ -87,6 +88,9 @@ for _lang, _defaults in _DEFAULT_MULTILANG.items():
     MULTILANG_EARLIEST_DATE[_lang] = _lang_cfg.get(
         "earliest_date", _defaults["earliest_date"],
     )
+
+# ── 이미지 오버라이드 ────────────────────────────────────────────────────
+IMAGE_OVERRIDES: dict[str, str] = _cfg.get("image_overrides", {})
 
 # MULTILANG_CONFIGS — build_posts_list.py 에서 사용하는 구조 그대로 생성
 MULTILANG_CONFIGS: dict[str, dict] = {}

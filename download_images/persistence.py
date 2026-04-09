@@ -107,6 +107,35 @@ def load_seen(filepath: Path) -> set[str]:
     return seen
 
 
+def load_failed_image_entries(filepath: Path) -> dict[str, set[str] | None]:
+    """failed_images.txt에서 {post_url: set[clean_img_url] | None} 로드.
+
+    img_url이 빈 엔트리(fetch_post_failed)는 None → 해당 포스트 전체 이미지 재시도.
+    """
+    from .url_utils import _clean_img_url
+
+    result: dict[str, set[str] | None] = {}
+    if not filepath.exists():
+        return result
+    for line in filepath.read_text(encoding="utf-8").splitlines():
+        parts = line.split("\t")
+        if len(parts) < 3:
+            continue
+        post_url_entry = parts[0].strip()
+        img_url_entry = parts[1].strip()
+        if not post_url_entry:
+            continue
+        if not img_url_entry:
+            result[post_url_entry] = None
+        elif result.get(post_url_entry) is not None or post_url_entry not in result:
+            if post_url_entry not in result:
+                result[post_url_entry] = set()
+            cur = result[post_url_entry]
+            if cur is not None:
+                cur.add(_clean_img_url(img_url_entry))
+    return result
+
+
 def record_failed(post_url: str, img_url: str, reason: str) -> None:
     _failed_log.record(post_url, img_url, reason)
 

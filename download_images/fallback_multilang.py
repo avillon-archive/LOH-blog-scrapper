@@ -320,11 +320,12 @@ def _fetch_multilang_wayback_image(
     published_time: str = "",
     ko_lastmod: str = "",
     ko_category: str = "",
-) -> tuple[bytes, str, str, str, str] | None:
+    content_img_idx: int | None = None,
+) -> tuple[bytes, str, str, str, str, str] | None:
     """다국어 블로그 Wayback 스냅샷에서 이미지를 탐색하는 통합 폴백 함수.
 
     Returns:
-        성공 시 (content, final_url, content_type, cd, fallback_post_url) 5-tuple.
+        성공 시 (content, final_url, content_type, cd, fallback_post_url, phase) 6-tuple.
     """
     check_date = published_time[:10] if published_time else post_date
     if check_date and all(
@@ -339,7 +340,7 @@ def _fetch_multilang_wayback_image(
             continue
         payload = _fetch_wayback_image(candidate_img_url)
         if payload:
-            return (*payload, "")
+            return (*payload, "", "A")
 
     # 후보 분류: confirmed (시그널 일치) vs unconfirmed
     confirmed, unconfirmed = _multilang_post_url_candidates(
@@ -369,14 +370,18 @@ def _fetch_multilang_wayback_image(
             else:
                 payload = None
             if payload:
-                return (*payload, alt_post_url)
+                return (*payload, alt_post_url, "A2")
 
     # Phase B: confirmed만 시도 (위치 기반 — 오매칭 위험)
-    for alt_post_url, lang in confirmed:
-        payload = _fetch_wayback_img_by_position(
-            alt_post_url, idx, utype, post_soup_cache
-        )
-        if payload:
-            return (*payload, alt_post_url)
+    # content_img_idx: KO 포스트 content <img> 태그 내 DOM 순서 (1-based)
+    # None이면 <img> 태그가 아닌 소스(예: <a> 태그 gdrive)이므로 위치 매칭 불가
+    b_idx = content_img_idx if content_img_idx is not None else idx
+    if content_img_idx is not None or utype == "og_image":
+        for alt_post_url, lang in confirmed:
+            payload = _fetch_wayback_img_by_position(
+                alt_post_url, b_idx, utype, post_soup_cache
+            )
+            if payload:
+                return (*payload, alt_post_url, "B")
 
     return None

@@ -26,6 +26,7 @@ from .constants import (
     FALLBACK_KAKAO_PF_LOG_FILE,
     FALLBACK_MULTILANG_LOG_FILE,
     FALLBACK_REPORT_FILE,
+    FALLBACK_STILL_FAILED_FILE,
     IMAGE_MAP_FILE,
     IMAGES_DIR,
 )
@@ -35,6 +36,7 @@ from .hashing import _load_or_build_img_hashes
 from .models import PostProcessResult
 from .persistence import (
     _load_done_post_urls,
+    load_failed_image_entries,
     load_seen,
     remove_from_failed,
     remove_from_failed_batch,
@@ -93,6 +95,41 @@ def _generate_fallback_csv(
         writer.writerows(rows)
 
     return len(rows)
+
+
+def _generate_still_failed_report() -> int:
+    """failed_images.txt에서 fallback 성공분을 빼고 잔여 실패를 기록한다."""
+    if not FAILED_FILE.exists():
+        return 0
+
+    # fallback 성공한 original_img_url 수집
+    recovered: set[str] = set()
+    for log_file in (FALLBACK_MULTILANG_LOG_FILE, FALLBACK_KAKAO_PF_LOG_FILE):
+        if not log_file.exists():
+            continue
+        for line in log_file.read_text(encoding="utf-8").splitlines():
+            parts = line.strip().split("\t")
+            if len(parts) >= 4 and parts[3].strip():
+                recovered.add(parts[3].strip())
+
+    # failed_images.txt에서 잔여 실패 추출
+    still_failed: list[str] = []
+    for line in FAILED_FILE.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        parts = line.split("\t")
+        img_url = parts[1].strip() if len(parts) >= 2 else ""
+        if img_url and img_url in recovered:
+            continue
+        still_failed.append(line)
+
+    if not still_failed:
+        return 0
+
+    FALLBACK_STILL_FAILED_FILE.write_text(
+        "\n".join(still_failed) + "\n", encoding="utf-8")
+    return len(still_failed)
 
 
 # ---------------------------------------------------------------------------
@@ -234,6 +271,7 @@ def run_fallback_images(
         print("[폴백] 실패 파일이 없습니다.")
         return
     fail_posts = load_failed_post_urls(FAILED_FILE)
+    failed_img_entries = load_failed_image_entries(FAILED_FILE)
     posts = [(url, date, *rest) for url, date, *rest in posts if url in fail_posts]
     print(f"[폴백] 재처리 대상: {len(posts)}개 포스트")
     if not posts:
@@ -275,6 +313,7 @@ def run_fallback_images(
                 multilang_date_index=multilang_date_index,
                 kakao_pf_index=kakao_pf_index,
                 published_time=pub_time,
+                failed_img_urls=failed_img_entries.get(url),
             ): (url, date)
             for url, date, pub_time, *_ in posts
         }
@@ -316,6 +355,10 @@ def run_fallback_images(
     csv_count = _generate_fallback_csv()
     if csv_count:
         print(f"[폴백] 리포트: {FALLBACK_REPORT_FILE} ({csv_count}건)")
+
+    still_failed_count = _generate_still_failed_report()
+    if still_failed_count:
+        print(f"[폴백] 잔여 실패: {FALLBACK_STILL_FAILED_FILE} ({still_failed_count}건)")
 
     if shutdown_event.is_set():
         print(f"\n[폴백 중단] 저장={total_saved} "

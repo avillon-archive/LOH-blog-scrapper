@@ -9,7 +9,7 @@ from bs4 import BeautifulSoup
 
 from utils import ROOT_DIR
 
-from .constants import DOWNLOADABLE_EXTS, KAKAO_PF_PROFILE
+from .constants import DOWNLOADABLE_EXTS, IMAGE_OVERRIDES, KAKAO_PF_PROFILE
 from .fetch import (
     _fetch_image,
     _fetch_wayback_gdrive_from_post,
@@ -20,7 +20,7 @@ from .fetch import (
 )
 from .hashing import _sha256_bytes
 from .models import PostSoupCache
-from .persistence import record_failed, save_image
+from .persistence import record_failed, remove_from_failed, save_image
 from .state import (
     _done_buf,
     _img_hash_buf,
@@ -151,6 +151,23 @@ def download_one_image(
 
     if seen_key in seen_urls:
         return "already"
+
+    # ── 수동 오버라이드 ──────────────────────────────────────────────────
+    clean_url = _clean_img_url(img_url)
+    override_target = IMAGE_OVERRIDES.get(clean_url)
+    if override_target:
+        target_clean = _clean_img_url(override_target)
+        local_path = image_map.get(target_clean)
+        if local_path:
+            with _state_lock:
+                seen_urls.add(seen_key)
+                image_map[clean_url] = local_path
+            _map_buf.add(f"{clean_url}\t{local_path}")
+            _done_buf.add(seen_key)
+            remove_from_failed(post_url, img_url=img_url)
+            return "override"
+        else:
+            print(f"  [override] target 미발견: {override_target[:80]}")
 
     # ── 다운로드 단계 (잠금 외부 – 네트워크 I/O) ──────────────────────────
     payload: tuple[bytes, str, str, str] | None = None

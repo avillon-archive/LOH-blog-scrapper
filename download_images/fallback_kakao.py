@@ -12,6 +12,7 @@ from .constants import (
     KAKAO_PF_API,
     KAKAO_PF_INDEX_FILE,
     KAKAO_PF_PROFILE,
+    KAKAO_TITLE_SIMILARITY,
 )
 from .fetch import _fetch_image
 from .models import KakaoPFPost
@@ -155,7 +156,9 @@ def _match_kakao_pf_post(
         return None
     if len(candidates) == 1:
         ratio = difflib.SequenceMatcher(None, blog_title, candidates[0].title).ratio()
-        if ratio < 0.3:
+        if ratio < KAKAO_TITLE_SIMILARITY:
+            print(f"  [kakao] 제목 불일치 기각: ratio={ratio:.2f} < {KAKAO_TITLE_SIMILARITY} "
+                  f'| blog="{blog_title[:40]}" kakao="{candidates[0].title[:40]}"')
             return None
         return candidates[0]
 
@@ -167,7 +170,9 @@ def _match_kakao_pf_post(
             best_ratio = ratio
             best = kp
 
-    if best_ratio < 0.3:
+    if best_ratio < KAKAO_TITLE_SIMILARITY:
+        print(f"  [kakao] 제목 불일치 기각: best_ratio={best_ratio:.2f} < {KAKAO_TITLE_SIMILARITY} "
+              f'| blog="{blog_title[:40]}" kakao="{best.title[:40] if best else ""}"')
         return None
     return best
 
@@ -217,4 +222,4 @@ def _fetch_kakao_pf_image(
         return None
 
     permalink = f"http://pf.kakao.com/{KAKAO_PF_PROFILE}/{kp.id}"
-    return (*payload, permalink)
+    return (*payload, permalink, "kakao")
