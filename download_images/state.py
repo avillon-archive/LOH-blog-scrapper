@@ -16,8 +16,6 @@ from .constants import (
     FALLBACK_MULTILANG_LOG_FILE,
     IMAGE_MAP_FILE,
     IMG_HASH_FILE,
-    KAKAO_PF_LOG_FILE,
-    MULTILANG_LOG_FILE,
 )
 from .models import ImageFailedLog
 
@@ -42,8 +40,6 @@ _done_buf = LineBuffer(DONE_FILE)
 _map_buf = LineBuffer(IMAGE_MAP_FILE)
 _img_hash_buf = LineBuffer(IMG_HASH_FILE)
 _done_posts_buf = LineBuffer(DONE_POSTS_FILE)
-_multilang_log_buf = LineBuffer(MULTILANG_LOG_FILE)
-_kakao_pf_log_buf = LineBuffer(KAKAO_PF_LOG_FILE)
 
 # ---------------------------------------------------------------------------
 # Wayback CDX 캐시

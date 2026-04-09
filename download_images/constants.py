@@ -34,10 +34,8 @@ FAILED_FILE = ROOT_DIR / "failed_images.txt"
 IMAGE_MAP_FILE = ROOT_DIR / "image_map.tsv"
 THUMB_HASH_FILE = ROOT_DIR / "thumbnail_hashes.txt"
 IMG_HASH_FILE = ROOT_DIR / "image_hashes.tsv"
-MULTILANG_LOG_FILE = IMAGES_DIR / "multilang_fallback.tsv"
 MULTILANG_INDEX_CACHE = ROOT_DIR / "multilang_sitemap_index.json"  # 구 캐시 (삭제 대상)
 MULTILANG_PUBLISHED_INDEX = ROOT_DIR / "multilang_published_index.json"
-KAKAO_PF_LOG_FILE = IMAGES_DIR / "kakao_pf_log.tsv"
 KAKAO_PF_INDEX_FILE = ROOT_DIR / "kakao_pf_index.json"
 FALLBACK_REPORT_FILE = ROOT_DIR / "fallback_report.csv"
 
@@ -46,8 +44,8 @@ FALLBACK_IMAGES_DIR = ROOT_DIR / "images_fallback"
 FALLBACK_DONE_FILE = ROOT_DIR / "fallback_downloaded_urls.txt"
 FALLBACK_IMAGE_MAP_FILE = ROOT_DIR / "fallback_image_map.tsv"
 FALLBACK_IMG_HASH_FILE = ROOT_DIR / "fallback_image_hashes.tsv"
-FALLBACK_MULTILANG_LOG_FILE = FALLBACK_IMAGES_DIR / "multilang_fallback.tsv"
-FALLBACK_KAKAO_PF_LOG_FILE = FALLBACK_IMAGES_DIR / "kakao_pf_log.tsv"
+FALLBACK_MULTILANG_LOG_FILE = ROOT_DIR / "fallback_multilang.tsv"
+FALLBACK_KAKAO_PF_LOG_FILE = ROOT_DIR / "fallback_kakao_pf.tsv"
 
 # ── 구현 수준 상수 (TOML 불필요) ──────────────────────────────────────────
 RESOLUTION_RE = re.compile(r"\d+\s*[xX×]\s*\d+")
