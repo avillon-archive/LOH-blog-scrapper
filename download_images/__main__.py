@@ -13,10 +13,10 @@ def main():
     parser.add_argument("--retry", action="store_true", help="Retry failed list")
     parser.add_argument("--retry-fallback", action="store_true",
                         help="실패 이미지에 multilang/kakao 폴백 시도 (별도 디렉토리에 보존)")
-    parser.add_argument("--posts", default=str(ROOT_DIR / "all_links.txt"),
+    parser.add_argument("--posts", default=str(ROOT_DIR / "all_links.csv"),
                         help="Posts list file")
     parser.add_argument("--backfill-map", action="store_true",
-                        help="Backfill image_map.tsv")
+                        help="Backfill image_map.csv")
     args = parser.parse_args()
 
     if args.backfill_map:

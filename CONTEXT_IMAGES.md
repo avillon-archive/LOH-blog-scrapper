@@ -8,7 +8,7 @@
 python -m download_images                    # 전체 이미지 수집
 python -m download_images --retry            # 실패 재처리
 python -m download_images --retry-fallback   # multilang/kakao 폴백
-python -m download_images --backfill-map     # image_map.tsv 누락 보충
+python -m download_images --backfill-map     # image_map.csv 누락 보충
 ```
 
 ---
@@ -60,13 +60,13 @@ URL 정규화: `clean_url()` (utils.py)이 모든 정규화를 담당. Ghost CMS
 
 ## 해시 중복 처리
 
-SHA-256 해시 기반. 해시 중복 시 저장 생략, `image_map`에 기존 경로 매핑. 이미지는 최초 저장 위치에서 이동하지 않는다. 레거시 `thumbnail_hashes.txt`에서 `image_hashes.tsv`로 자동 마이그레이션.
+SHA-256 해시 기반. 해시 중복 시 저장 생략, `image_map`에 기존 경로 매핑. 이미지는 최초 저장 위치에서 이동하지 않는다. 레거시 `thumbnail_hashes.txt (레거시)`에서 `image_hashes.csv`로 자동 마이그레이션.
 
 ---
 
 ## 이미지 오버라이드 (`[image_overrides]`)
 
-`config.toml`의 `[image_overrides]` 섹션으로 영구 깨진 URL을 기존 이미지에 수동 매핑. `download_one_image()` 진입 시 체크하여 `image_map`에 기록 + `failed_images.txt`에서 제거. 다음 `html_local` 실행 시 stale 추적으로 자동 반영.
+`config.toml`의 `[image_overrides]` 섹션으로 영구 깨진 URL을 기존 이미지에 수동 매핑. `download_one_image()` 진입 시 체크하여 `image_map`에 기록 + `failed_images.csv`에서 제거. 다음 `html_local` 실행 시 stale 추적으로 자동 반영.
 
 ```toml
 [image_overrides]

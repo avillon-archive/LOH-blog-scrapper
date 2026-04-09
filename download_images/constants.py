@@ -31,11 +31,11 @@ from utils import SIZE_W_RE  # noqa: F401 – re-export
 # ── ROOT_DIR 기반 경로 파생 ───────────────────────────────────────────────
 IMAGES_DIR = ROOT_DIR / "images"
 DONE_FILE = ROOT_DIR / "downloaded_urls.txt"
-DONE_POSTS_FILE = ROOT_DIR / "done_posts_images.txt"
-FAILED_FILE = ROOT_DIR / "failed_images.txt"
-IMAGE_MAP_FILE = ROOT_DIR / "image_map.tsv"
+DONE_POSTS_FILE = ROOT_DIR / "done_posts_images.csv"
+FAILED_FILE = ROOT_DIR / "failed_images.csv"
+IMAGE_MAP_FILE = ROOT_DIR / "image_map.csv"
 THUMB_HASH_FILE = ROOT_DIR / "thumbnail_hashes.txt"
-IMG_HASH_FILE = ROOT_DIR / "image_hashes.tsv"
+IMG_HASH_FILE = ROOT_DIR / "image_hashes.csv"
 MULTILANG_INDEX_CACHE = ROOT_DIR / "multilang_sitemap_index.json"  # 구 캐시 (삭제 대상)
 MULTILANG_PUBLISHED_INDEX = ROOT_DIR / "multilang_published_index.json"
 KAKAO_PF_INDEX_FILE = ROOT_DIR / "kakao_pf_index.json"
@@ -44,11 +44,11 @@ FALLBACK_REPORT_FILE = ROOT_DIR / "fallback_report.csv"
 # Fallback 전용 (--retry-fallback, 보존 목적 — primary 트래킹과 완전 분리)
 FALLBACK_IMAGES_DIR = ROOT_DIR / "images_fallback"
 FALLBACK_DONE_FILE = ROOT_DIR / "fallback_downloaded_urls.txt"
-FALLBACK_IMAGE_MAP_FILE = ROOT_DIR / "fallback_image_map.tsv"
-FALLBACK_IMG_HASH_FILE = ROOT_DIR / "fallback_image_hashes.tsv"
-FALLBACK_MULTILANG_LOG_FILE = ROOT_DIR / "fallback_multilang.tsv"
-FALLBACK_KAKAO_PF_LOG_FILE = ROOT_DIR / "fallback_kakao_pf.tsv"
-FALLBACK_STILL_FAILED_FILE = ROOT_DIR / "fallback_still_failed.tsv"
+FALLBACK_IMAGE_MAP_FILE = ROOT_DIR / "fallback_image_map.csv"
+FALLBACK_IMG_HASH_FILE = ROOT_DIR / "fallback_image_hashes.csv"
+FALLBACK_MULTILANG_LOG_FILE = ROOT_DIR / "fallback_multilang.csv"
+FALLBACK_KAKAO_PF_LOG_FILE = ROOT_DIR / "fallback_kakao_pf.csv"
+FALLBACK_STILL_FAILED_FILE = ROOT_DIR / "fallback_still_failed.csv"
 
 # ── 구현 수준 상수 (TOML 불필요) ──────────────────────────────────────────
 RESOLUTION_RE = re.compile(r"\d+\s*[xX×]\s*\d+")

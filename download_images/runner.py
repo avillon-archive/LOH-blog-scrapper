@@ -7,6 +7,7 @@ import time
 from concurrent.futures import CancelledError, ThreadPoolExecutor, as_completed
 from pathlib import Path
 
+from log_io import _is_header, _split_row, csv_line
 from utils import (
     DEFAULT_MAX_WORKERS,
     ROOT_DIR,
@@ -73,10 +74,10 @@ def _generate_fallback_csv(
         if not log_file.exists():
             continue
         for line in log_file.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if not line:
+            line = line.strip().lstrip("\ufeff")
+            if not line or _is_header(line, "saved_path,post_url,source_url,img_url,phase"):
                 continue
-            parts = line.split("\t")
+            parts = _split_row(line)
             if len(parts) < 3:
                 continue
             saved_path = parts[0]
@@ -108,27 +109,34 @@ def _generate_still_failed_report() -> int:
         if not log_file.exists():
             continue
         for line in log_file.read_text(encoding="utf-8").splitlines():
-            parts = line.strip().split("\t")
-            if len(parts) >= 4 and parts[3].strip():
-                recovered.add(parts[3].strip())
+            line_s = line.strip().lstrip("\ufeff")
+            if not line_s or _is_header(line_s, "saved_path,post_url,source_url,img_url,phase"):
+                continue
+            parts = _split_row(line_s)
+            if len(parts) >= 4 and parts[3]:
+                recovered.add(parts[3])
 
     # failed_images.txt에서 잔여 실패 추출
-    still_failed: list[str] = []
+    still_failed: list[list[str]] = []
     for line in FAILED_FILE.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line:
+        line = line.strip().lstrip("\ufeff")
+        if not line or _is_header(line, "post_url,img_url,reason"):
             continue
-        parts = line.split("\t")
-        img_url = parts[1].strip() if len(parts) >= 2 else ""
+        parts = _split_row(line)
+        if len(parts) < 2:
+            continue
+        img_url = parts[1]
         if img_url and img_url in recovered:
             continue
-        still_failed.append(line)
+        still_failed.append(parts)
 
     if not still_failed:
         return 0
 
+    header = "post_url,img_url,reason"
+    rows = [header] + [csv_line(*row) for row in still_failed]
     FALLBACK_STILL_FAILED_FILE.write_text(
-        "\n".join(still_failed) + "\n", encoding="utf-8")
+        "\n".join(rows) + "\n", encoding="utf-8-sig")
     return len(still_failed)
 
 
@@ -251,7 +259,10 @@ def _load_fallback_hashes() -> dict[str, str]:
     if not FALLBACK_IMG_HASH_FILE.exists():
         return result
     for line in FALLBACK_IMG_HASH_FILE.read_text(encoding="utf-8").splitlines():
-        parts = line.strip().split("\t")
+        line_s = line.strip().lstrip("\ufeff")
+        if not line_s or _is_header(line_s, "hash,relative_path,is_thumb"):
+            continue
+        parts = _split_row(line_s)
         if len(parts) >= 2:
             result[parts[0]] = parts[1]
     return result

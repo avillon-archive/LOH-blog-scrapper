@@ -19,8 +19,8 @@ from utils import (
     write_text_unique,
 )
 HTML_DIR = ROOT_DIR / "html"
-DONE_FILE = ROOT_DIR / "done_html.txt"
-FAILED_FILE = ROOT_DIR / "failed_html.txt"
+DONE_FILE = ROOT_DIR / "done_html.csv"
+FAILED_FILE = ROOT_DIR / "failed_html.csv"
 
 
 # ---------------------------------------------------------------------------
@@ -152,7 +152,7 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="HTML 파일 저장")
     parser.add_argument("--retry", action="store_true", help="실패 목록 재처리")
-    parser.add_argument("--posts", default=str(ROOT_DIR / "all_posts.txt"), help="포스트 목록 파일")
+    parser.add_argument("--posts", default=str(ROOT_DIR / "all_posts.csv"), help="포스트 목록 파일")
     args = parser.parse_args()
 
     posts = load_posts(args.posts)

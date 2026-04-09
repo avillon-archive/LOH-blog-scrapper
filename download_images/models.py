@@ -10,6 +10,7 @@ from typing import NamedTuple
 
 from bs4 import BeautifulSoup
 
+from log_io import _is_header, _split_row, csv_line
 from utils import (
     append_line,
     filter_file_lines,
@@ -71,11 +72,14 @@ class ImageFailedLog:
         if not self._filepath.exists():
             return entries
         for line in self._filepath.read_text(encoding="utf-8").splitlines():
-            parts = line.split("\t")
+            line = line.strip().lstrip("\ufeff")
+            if not line or _is_header(line, "post_url,img_url,reason"):
+                continue
+            parts = _split_row(line)
             if len(parts) >= 3:
-                post_url = parts[0].strip()
-                img_url = parts[1].strip()
-                reason = parts[2].strip()
+                post_url = parts[0]
+                img_url = parts[1]
+                reason = parts[2]
                 if post_url and reason:
                     entries.add((post_url, img_url, reason))
         return entries
@@ -88,36 +92,39 @@ class ImageFailedLog:
             if key in self._cache:
                 return
             self._cache.add(key)
-            append_line(self._filepath, f"{post_url}\t{img_url}\t{reason}")
+            append_line(self._filepath, csv_line(post_url, img_url, reason),
+                        header="post_url,img_url,reason")
 
     def remove(self, post_url: str, reason: str | None = None,
                img_url: str | None = None) -> None:
         if not self._filepath.exists():
             return
-        prefix = post_url + "\t"
         if img_url is not None:
             def _keep(line: str) -> bool:
-                if not line.startswith(prefix):
+                parts = _split_row(line.strip())
+                if len(parts) < 2 or parts[0] != post_url:
                     return True
-                parts = line.split("\t")
-                return (parts[1].strip() if len(parts) >= 2 else "") != img_url
+                return parts[1] != img_url
             filter_file_lines(self._filepath, _keep)
             with self._lock:
                 if self._cache is None:
                     self._cache = self._load()
                 self._cache = {e for e in self._cache if not (e[0] == post_url and e[1] == img_url)}
         elif reason is None:
-            remove_lines_by_prefix(self._filepath, prefix)
+            def _keep(line: str) -> bool:
+                parts = _split_row(line.strip())
+                return not parts or parts[0] != post_url
+            filter_file_lines(self._filepath, _keep)
             with self._lock:
                 if self._cache is None:
                     self._cache = self._load()
                 self._cache = {e for e in self._cache if e[0] != post_url}
         else:
             def _keep(line: str) -> bool:
-                if not line.startswith(prefix):
+                parts = _split_row(line.strip())
+                if len(parts) < 3 or parts[0] != post_url:
                     return True
-                parts = line.split("\t")
-                return (parts[2].strip() if len(parts) >= 3 else "") != reason
+                return parts[2] != reason
             filter_file_lines(self._filepath, _keep)
             with self._lock:
                 if self._cache is None:
@@ -128,13 +135,12 @@ class ImageFailedLog:
         """post_url에 속하는 여러 img_url 엔트리를 한 번의 파일 I/O로 제거한다."""
         if not img_urls or not self._filepath.exists():
             return
-        prefix = post_url + "\t"
 
         def _keep(line: str) -> bool:
-            if not line.startswith(prefix):
+            parts = _split_row(line.strip())
+            if len(parts) < 2 or parts[0] != post_url:
                 return True
-            parts = line.split("\t")
-            return (parts[1].strip() if len(parts) >= 2 else "") not in img_urls
+            return parts[1] not in img_urls
         filter_file_lines(self._filepath, _keep)
         with self._lock:
             if self._cache is None:

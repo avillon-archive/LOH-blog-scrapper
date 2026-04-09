@@ -7,6 +7,7 @@ from pathlib import Path
 
 from bs4 import BeautifulSoup
 
+from log_io import csv_line
 from utils import ROOT_DIR
 
 from .constants import DOWNLOADABLE_EXTS, IMAGE_OVERRIDES, KAKAO_PF_PROFILE
@@ -162,7 +163,7 @@ def download_one_image(
             with _state_lock:
                 seen_urls.add(seen_key)
                 image_map[clean_url] = local_path
-            _map_buf.add(f"{clean_url}\t{local_path}")
+            _map_buf.add(csv_line(clean_url, local_path))
             _done_buf.add(seen_key)
             remove_from_failed(post_url, img_url=img_url)
             return "override"
@@ -224,7 +225,7 @@ def download_one_image(
             img_key = _clean_img_url(img_url)
             if img_key not in image_map:
                 image_map[img_key] = existing_rel
-                _map_buf.add(f"{img_key}\t{existing_rel}")
+                _map_buf.add(csv_line(img_key, existing_rel))
             should_save = False
         else:
             seen_urls.add(seen_key)
@@ -243,8 +244,8 @@ def download_one_image(
             img_hashes[content_hash] = rel
             if img_key not in image_map:  # type: ignore[operator]
                 image_map[img_key] = rel   # type: ignore[index]
-                _map_buf.add(f"{img_key}\t{rel}")
-        _img_hash_buf.add(f"{content_hash}\t{rel}\t{'T' if is_thumb else ''}")
+                _map_buf.add(csv_line(img_key, rel))
+        _img_hash_buf.add(csv_line(content_hash, rel, "T" if is_thumb else ""))
 
     _done_buf.add(seen_key)
 

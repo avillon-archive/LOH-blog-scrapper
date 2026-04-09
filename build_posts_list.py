@@ -2,6 +2,7 @@
 build_posts_list.py - parse sitemap-posts.xml / sitemap-pages.xml and build
                       all_posts.txt / all_pages.txt / all_links.txt
 """
+import csv
 import re
 import sys
 import xml.etree.ElementTree as ET
@@ -12,11 +13,13 @@ from bs4 import BeautifulSoup
 from config import MULTILANG_CONFIGS, ROOT_DIR, SITEMAP_PAGES_URL, SITEMAP_URL
 from utils import build_html_index, fetch_with_retry, load_posts
 
-OUTPUT_FILE = ROOT_DIR / "all_posts.txt"
-PAGES_OUTPUT_FILE = ROOT_DIR / "all_pages.txt"
-LINKS_OUTPUT_FILE = ROOT_DIR / "all_links.txt"
+_POSTS_HEADER = ["url", "lastmod", "published_time"]
+
+OUTPUT_FILE = ROOT_DIR / "all_posts.csv"
+PAGES_OUTPUT_FILE = ROOT_DIR / "all_pages.csv"
+LINKS_OUTPUT_FILE = ROOT_DIR / "all_links.csv"
 HTML_DIR = ROOT_DIR / "html"
-DONE_HTML_FILE = ROOT_DIR / "done_html.txt"
+DONE_HTML_FILE = ROOT_DIR / "done_html.csv"
 
 # Date extractor from <lastmod> values.
 DATE_RE = re.compile(r"(\d{4}-\d{2}-\d{2})")
@@ -104,11 +107,12 @@ def _build_sitemap_file(
     # 날짜 내림차순 정렬 (날짜 없는 항목은 맨 뒤)
     entries.sort(key=lambda x: (x[1] != "", x[1]), reverse=True)
 
-    lines: list[str] = []
-    for url, date in entries:
-        pub = existing_published.get(url, "")
-        lines.append(f"{url}\t{date}\t{pub}" if pub else f"{url}\t{date}")
-    output_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    with open(output_file, "w", encoding="utf-8-sig", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(_POSTS_HEADER)
+        for url, date in entries:
+            pub = existing_published.get(url, "")
+            writer.writerow([url, date, pub])
     return len(entries), entries
 
 
@@ -214,10 +218,11 @@ def _build_multilang_links(cfg: dict[str, str | Path]) -> int:
         reverse=True,
     )
 
-    lines: list[str] = []
-    for url, (date, published) in entries:
-        lines.append(f"{url}\t{date}\t{published}" if published else f"{url}\t{date}")
-    cfg["all_links"].write_text("\n".join(lines) + "\n", encoding="utf-8")
+    with open(cfg["all_links"], "w", encoding="utf-8-sig", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(_POSTS_HEADER)
+        for url, (date, published) in entries:
+            writer.writerow([url, date, published])
     return len(entries)
 
 
@@ -251,10 +256,11 @@ def build_links_and_write() -> int:
         reverse=True,
     )
 
-    lines: list[str] = []
-    for url, (date, published) in entries:
-        lines.append(f"{url}\t{date}\t{published}" if published else f"{url}\t{date}")
-    LINKS_OUTPUT_FILE.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    with open(LINKS_OUTPUT_FILE, "w", encoding="utf-8-sig", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(_POSTS_HEADER)
+        for url, (date, published) in entries:
+            writer.writerow([url, date, published])
     return len(entries)
 
 
@@ -297,10 +303,11 @@ def fill_published_times(
             filled += 1
         updated.append((url, lastmod, pub_value))
 
-    lines: list[str] = []
-    for url, lastmod, published in updated:
-        lines.append(f"{url}\t{lastmod}\t{published}" if published else f"{url}\t{lastmod}")
-    posts_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    with open(posts_file, "w", encoding="utf-8-sig", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(_POSTS_HEADER)
+        for url, lastmod, published in updated:
+            writer.writerow([url, lastmod, published])
     print(f"[published_time] {filled}개 항목 채움 (총 {len(updated)}개)")
     return filled
 

@@ -54,17 +54,17 @@ from download_images import run_images, run_fallback_images
 from download_md import run_md
 from download_html import run_html
 from download_html_local import run_html_local
-POSTS_FILE = ROOT_DIR / "all_posts.txt"
-PAGES_FILE = ROOT_DIR / "all_pages.txt"
-LINKS_FILE = ROOT_DIR / "all_links.txt"
+POSTS_FILE = ROOT_DIR / "all_posts.csv"
+PAGES_FILE = ROOT_DIR / "all_pages.csv"
+LINKS_FILE = ROOT_DIR / "all_links.csv"
 CUSTOM_POSTS_FILE = ROOT_DIR / "custom_posts.txt"
-FAILED_IMAGES_FILE = ROOT_DIR / "failed_images.txt"
-FAILED_MD_FILE = ROOT_DIR / "failed_md.txt"
-FAILED_HTML_FILE = ROOT_DIR / "failed_html.txt"
-FAILED_HTML_LOCAL_FILE = ROOT_DIR / "failed_html_local.txt"
+FAILED_IMAGES_FILE = ROOT_DIR / "failed_images.csv"
+FAILED_MD_FILE = ROOT_DIR / "failed_md.csv"
+FAILED_HTML_FILE = ROOT_DIR / "failed_html.csv"
+FAILED_HTML_LOCAL_FILE = ROOT_DIR / "failed_html_local.csv"
 PIPELINE_ORDER = ("html", "images", "md", "html-local")
 HTML_DIR = ROOT_DIR / "html"
-DONE_HTML_FILE = ROOT_DIR / "done_html.txt"
+DONE_HTML_FILE = ROOT_DIR / "done_html.csv"
 
 # EN/JA HTML 경로 (build_posts_list.MULTILANG_CONFIGS 와 동일 경로)
 
@@ -80,11 +80,10 @@ def _newest_local_date(posts_file: Path) -> str:
     파일이 없거나 읽기 실패 시 "" 반환.
     """
     try:
-        for line in posts_file.read_text(encoding="utf-8").splitlines():
-            parts = line.strip().split("\t")
-            if len(parts) == 2 and parts[1].strip():
-                return parts[1].strip()
-    except OSError:
+        posts = load_posts(posts_file)
+        if posts:
+            return posts[0][1]  # 첫 행의 lastmod
+    except Exception:
         pass
     return ""
 
@@ -187,38 +186,33 @@ def _sample_posts(
 
 def _sample_source_label(selected: set[str]) -> str:
     if selected == {"images"}:
-        return "failed_images.txt"
+        return "failed_images.csv"
     if selected == {"md"}:
-        return "failed_md.txt"
+        return "failed_md.csv"
     if selected == {"html"}:
-        return "failed_html.txt"
+        return "failed_html.csv"
     if selected == {"html-local"}:
-        return "failed_html_local.txt"
+        return "failed_html_local.csv"
 
     labels: list[str] = []
     if "images" in selected:
-        labels.append("failed_images.txt")
+        labels.append("failed_images.csv")
     if "md" in selected:
-        labels.append("failed_md.txt")
+        labels.append("failed_md.csv")
     if "html" in selected:
-        labels.append("failed_html.txt")
+        labels.append("failed_html.csv")
     if "html-local" in selected:
-        labels.append("failed_html_local.txt")
+        labels.append("failed_html_local.csv")
     return "union(" + " + ".join(labels) + ")"
 
 
 def _count_file_lines(posts_file: Path) -> int:
-    """파일의 유효 행 수(공백·# 주석 제외)를 반환한다.
+    """파일의 유효 포스트 수를 반환한다.
 
     파일이 없거나 읽기 실패 시 0 반환.
     """
     try:
-        count = 0
-        for line in posts_file.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if line and not line.startswith("#"):
-                count += 1
-        return count
+        return len(load_posts(posts_file))
     except Exception:
         return 0
 
@@ -310,17 +304,17 @@ def main():
     force_download = bool(args.force)
     if args.posts:
         posts_file = POSTS_FILE
-        source_label = "all_posts.txt"
+        source_label = "all_posts.csv"
     elif args.pages:
         posts_file = PAGES_FILE
-        source_label = "all_pages.txt"
+        source_label = "all_pages.csv"
     elif args.custom:
         posts_file = CUSTOM_POSTS_FILE
         source_label = "custom_posts.txt"
         force_download = True
     else:
         posts_file = LINKS_FILE
-        source_label = "all_links.txt"
+        source_label = "all_links.csv"
 
     # ── 사이트맵 갱신 ─────────────────────────────────────────────────
     if args.posts:
@@ -430,7 +424,7 @@ def main():
                     if not lang_links:
                         print(f"  [{lang.upper()}] 포스트 목록 없음, 건너뜀")
                         continue
-                    failed_file = cfg["done_html"].parent / f"failed_html_{lang}.txt"
+                    failed_file = cfg["done_html"].parent / f"failed_html_{lang}.csv"
                     run_html(lang_links,
                              retry_mode=args.retry if html_is_primary else False,
                              force_download=force_download if html_is_primary else False,

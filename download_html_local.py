@@ -2,7 +2,7 @@
 """오프라인 열람용 HTML 생성.
 
 이미 다운로드된 html/ 파일을 기반으로:
-  1. 이미지 경로를 image_map.tsv 기반 로컬 상대경로로 리라이트
+  1. 이미지 경로를 image_map.csv 기반 로컬 상대경로로 리라이트
   2. 모든 <script> 태그 제거
   3. CSS를 로컬에 저장하고 href를 상대경로로 교체
   4. html_local/ 에 저장
@@ -17,6 +17,7 @@ from bs4 import BeautifulSoup
 
 from asset_downloader import CssDownloader, SiteImageDownloader
 from config import BLOG_BASE as _BLOG_BASE, BLOG_HOST_RE, TAG_SLUG_TO_CATEGORY
+from log_io import append_line, csv_line
 from utils import (
     DEFAULT_MAX_WORKERS,
     ROOT_DIR,
@@ -35,10 +36,10 @@ from utils import (
 HTML_DIR = ROOT_DIR / "html"
 HTML_LOCAL_DIR = ROOT_DIR / "html_local"
 ASSETS_DIR = HTML_LOCAL_DIR / "assets"
-IMAGE_MAP_FILE = ROOT_DIR / "image_map.tsv"
-DONE_FILE = ROOT_DIR / "done_html_local.txt"
-FAILED_FILE = ROOT_DIR / "failed_html_local.txt"
-STALE_FILE = ROOT_DIR / "stale_html_local.txt"
+IMAGE_MAP_FILE = ROOT_DIR / "image_map.csv"
+DONE_FILE = ROOT_DIR / "done_html_local.csv"
+FAILED_FILE = ROOT_DIR / "failed_html_local.csv"
+STALE_FILE = ROOT_DIR / "stale_html_local.csv"
 
 # 인라인 style background-image 패턴
 BG_IMAGE_RE = re.compile(
@@ -384,7 +385,7 @@ def _process_post(
     output = localizer.localize()
 
     if stale_buf and localizer.unmapped_urls:
-        stale_buf.add(f"{post_url}\t{'|'.join(localizer.unmapped_urls)}")
+        stale_buf.add(csv_line(post_url, "|".join(localizer.unmapped_urls)))
 
     # 블로그 홈페이지는 index.html 로 저장
     if post_url.rstrip("/") == _BLOG_BASE:
@@ -412,7 +413,7 @@ def run_html_local(
     max_workers: int = DEFAULT_MAX_WORKERS,
     html_dir: Path = HTML_DIR,
     html_local_dir: Path = HTML_LOCAL_DIR,
-    done_html_file: Path = ROOT_DIR / "done_html.txt",
+    done_html_file: Path = ROOT_DIR / "done_html.csv",
     done_file: Path = DONE_FILE,
     failed_file: Path = FAILED_FILE,
 ) -> None:
@@ -455,11 +456,11 @@ def run_html_local(
             print(f"[HTML-LOCAL] stale {len(stale)}개 항목, refresh 대상 없음")
 
     # ── stale 파일 재작성 ──────────────────────────────────────────────
-    STALE_FILE.write_text("", encoding="utf-8")
-    stale_buf = LineBuffer(STALE_FILE, flush_every=50)
+    STALE_FILE.unlink(missing_ok=True)
+    stale_buf = LineBuffer(STALE_FILE, flush_every=50, header="post_url,unmapped_urls")
     for url, unmapped in stale.items():
         if url not in refresh_urls:
-            stale_buf.add(f"{url}\t{'|'.join(unmapped)}")
+            stale_buf.add(csv_line(url, "|".join(unmapped)))
 
     # run_pipeline 용 (url, date) 형식으로 변환
     url_to_path: dict[str, Path] = {url: path for path, url in source}
@@ -496,8 +497,7 @@ def run_html_local(
             with done_lock:
                 done_slugs[slug] = url
                 done_urls.add(url)
-                with open(done_file, "a", encoding="utf-8") as f:
-                    f.write(f"{slug}\t{url}\n")
+            append_line(done_file, csv_line(slug, url), header="slug,post_url")
         return success
 
     run_pipeline(

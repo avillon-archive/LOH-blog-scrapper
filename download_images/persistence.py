@@ -4,6 +4,7 @@
 import re
 from pathlib import Path
 
+from log_io import _is_header, _split_row, csv_line
 from utils import ROOT_DIR, append_line, load_image_map
 
 from .constants import (
@@ -61,7 +62,8 @@ def record_image_map(
         return
     image_map[clean_url_key] = relative_path
     ROOT_DIR.mkdir(parents=True, exist_ok=True)
-    append_line(filepath, f"{clean_url_key}\t{relative_path}")
+    append_line(filepath, csv_line(clean_url_key, relative_path),
+                header="clean_url,relative_path")
 
 
 # ---------------------------------------------------------------------------
@@ -75,12 +77,12 @@ def _load_done_post_urls(filepath: Path) -> dict[str, int]:
         return {}
     result: dict[str, int] = {}
     for line in filepath.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line:
+        line = line.strip().lstrip("\ufeff")
+        if not line or _is_header(line, "post_url,image_count"):
             continue
-        parts = line.split("\t")
-        url = parts[0].strip()
-        count = int(parts[1]) if len(parts) >= 2 and parts[1].strip().isdigit() else 0
+        parts = _split_row(line)
+        url = parts[0]
+        count = int(parts[1]) if len(parts) >= 2 and parts[1].isdigit() else 0
         result[url] = count
     return result
 
@@ -118,11 +120,14 @@ def load_failed_image_entries(filepath: Path) -> dict[str, set[str] | None]:
     if not filepath.exists():
         return result
     for line in filepath.read_text(encoding="utf-8").splitlines():
-        parts = line.split("\t")
+        line = line.strip().lstrip("\ufeff")
+        if not line or _is_header(line, "post_url,img_url,reason"):
+            continue
+        parts = _split_row(line)
         if len(parts) < 3:
             continue
-        post_url_entry = parts[0].strip()
-        img_url_entry = parts[1].strip()
+        post_url_entry = parts[0]
+        img_url_entry = parts[1]
         if not post_url_entry:
             continue
         if not img_url_entry:

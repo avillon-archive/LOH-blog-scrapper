@@ -239,7 +239,7 @@ def generate_listing_pages(
     assets_dir.mkdir(parents=True, exist_ok=True)
 
     if done_html_file is None:
-        done_html_file = ROOT_DIR / "done_html.txt"
+        done_html_file = ROOT_DIR / "done_html.csv"
 
     css_downloader = CssDownloader(assets_dir)
     site_img_downloader = SiteImageDownloader(assets_dir)

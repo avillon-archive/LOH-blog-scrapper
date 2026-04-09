@@ -8,6 +8,7 @@ from pathlib import Path
 
 from bs4 import BeautifulSoup
 
+from log_io import csv_line
 from utils import (
     ROOT_DIR,
     date_to_folder,
@@ -117,7 +118,7 @@ def process_post(
 
     if fail == 0:
         done_post_urls[post_url] = len(images)
-        _done_posts_buf.add(f"{post_url}\t{len(images)}")
+        _done_posts_buf.add(csv_line(post_url, str(len(images))))
 
     return PostProcessResult(ok=ok, fail=fail, post_fetch_ok=True,
                              ok_saved=ok_saved, ok_original=ok_saved,
@@ -244,7 +245,7 @@ def process_post_fallback(
             existing_rel = fb_img_hashes.get(p_hash)
             if existing_rel is not None:
                 fb_seen_urls.add(seen_key)
-                _fb_map_buf.add(f"{_clean_img_url(img_url)}\t{existing_rel}")
+                _fb_map_buf.add(csv_line(_clean_img_url(img_url), existing_rel))
                 _fb_done_buf.add(seen_key)
                 continue
             fb_seen_urls.add(seen_key)
@@ -266,15 +267,15 @@ def process_post_fallback(
             fb_img_hashes[p_hash] = p_rel
 
         img_key = _clean_img_url(img_url)
-        _fb_map_buf.add(f"{img_key}\t{p_rel}")
+        _fb_map_buf.add(csv_line(img_key, p_rel))
         _fb_done_buf.add(seen_key)
-        _fb_img_hash_buf.add(f"{p_hash}\t{p_rel}\t")
+        _fb_img_hash_buf.add(csv_line(p_hash, p_rel, ""))
 
         if p_source.startswith("http://pf.kakao.com/"):
-            _fb_kakao_pf_log_buf.add(f"{p_rel}\t{post_url}\t{p_source}\t{img_url}\t{p_phase}")
+            _fb_kakao_pf_log_buf.add(csv_line(p_rel, post_url, p_source, img_url, p_phase))
             ok_kakao += 1
         else:
-            _fb_multilang_log_buf.add(f"{p_rel}\t{post_url}\t{p_source}\t{img_url}\t{p_phase}")
+            _fb_multilang_log_buf.add(csv_line(p_rel, post_url, p_source, img_url, p_phase))
             ok_multilang += 1
         ok_saved += 1
 
@@ -294,10 +295,10 @@ def process_post_fallback(
                 if a_rel:
                     if a_source.startswith("http://pf.kakao.com/"):
                         _fb_kakao_pf_log_buf.add(
-                            f"{a_rel}\t{post_url}\t{a_source}\t{img_url}\t{a_phase}")
+                            csv_line(a_rel, post_url, a_source, img_url, a_phase))
                     else:
                         _fb_multilang_log_buf.add(
-                            f"{a_rel}\t{post_url}\t{a_source}\t{img_url}\t{a_phase}")
+                            csv_line(a_rel, post_url, a_source, img_url, a_phase))
 
     return PostProcessResult(
         ok=ok_saved, fail=0, post_fetch_ok=True,

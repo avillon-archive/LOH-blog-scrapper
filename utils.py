@@ -25,18 +25,30 @@ from config import (  # noqa: E402 — 중앙 설정에서 re-export
     VALID_CATEGORIES,
 )
 
+# log_io.py re-export — 기존 `from utils import X` 호환성 유지
+from log_io import (  # noqa: F401
+    FailedLog,
+    LineBuffer,
+    append_line,
+    csv_line,
+    filter_file_lines,
+    flush_all_buffers,
+    load_done_file,
+    load_failed_post_urls,
+    load_image_map,
+    load_posts,
+    load_stale,
+    remove_lines_by_prefix,
+    write_text_unique,
+)
+
 if TYPE_CHECKING:
     from bs4 import BeautifulSoup
-
-# File I/O lock for append/filter/remove helpers.
-_file_lock = threading.Lock()
 
 # ---------------------------------------------------------------------------
 # Graceful shutdown
 # ---------------------------------------------------------------------------
 shutdown_event = threading.Event()          # 전역 중단 신호
-_line_buffers: list["LineBuffer"] = []      # LineBuffer 레지스트리
-_line_buffers_lock = threading.Lock()
 
 
 class _TokenBucket:
@@ -132,58 +144,6 @@ def date_to_folder(date_str: str) -> str:
     return date_str or "unknown"
 
 
-def load_image_map(filepath: Path) -> dict[str, str]:
-    """Load image_map.tsv into {clean_url: relative_path}."""
-    image_map: dict[str, str] = {}
-    if not filepath.exists():
-        return image_map
-    for line in filepath.read_text(encoding="utf-8").splitlines():
-        row = line.strip()
-        if not row:
-            continue
-        parts = row.split("\t", 1)
-        if len(parts) != 2:
-            continue
-        image_map[parts[0].strip()] = parts[1].strip()
-    return image_map
-
-
-def load_done_file(filepath: Path) -> dict[str, str]:
-    """Load done_md.txt / done_html.txt into {slug: post_url}."""
-    done: dict[str, str] = {}
-    if filepath.exists():
-        for line in filepath.read_text(encoding="utf-8").splitlines():
-            row = line.strip()
-            if not row:
-                continue
-            parts = row.split("\t", 1)
-            if len(parts) == 2 and parts[1].strip():
-                done[parts[0].strip()] = parts[1].strip()
-    return done
-
-
-def load_failed_post_urls(filepath: Path) -> set[str]:
-    """Return first-column post URLs from failed log file."""
-    failed: set[str] = set()
-    if not filepath.exists():
-        return failed
-    for line in filepath.read_text(encoding="utf-8").splitlines():
-        parts = line.split("\t")
-        if parts and parts[0].strip():
-            failed.add(parts[0].strip())
-    return failed
-
-
-def load_stale(filepath: Path) -> dict[str, set[str]]:
-    """stale 파일을 로드. {post_url: set[clean_url]}."""
-    result: dict[str, set[str]] = {}
-    if not filepath.exists():
-        return result
-    for line in filepath.read_text(encoding="utf-8").splitlines():
-        parts = line.strip().split("\t", 1)
-        if len(parts) == 2 and parts[0]:
-            result[parts[0]] = set(parts[1].split("|"))
-    return result
 
 
 def get_session() -> requests.Session:
@@ -269,52 +229,6 @@ def fetch_with_retry(
     return None
 
 
-def load_posts(filepath: str | Path) -> list[tuple[str, str, str]]:
-    """
-    Load all_posts.txt / custom_posts.txt
-    Each line: URL<TAB>lastmod[<TAB>published_time]
-    """
-    posts: list[tuple[str, str, str]] = []
-    path = Path(filepath)
-    if not path.exists():
-        print(f"[warning] file not found: {filepath}")
-        return posts
-    with open(path, encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line or line.startswith("#"):
-                continue
-            parts = line.split("\t")
-            url = parts[0].strip()
-            lastmod = parts[1].strip() if len(parts) >= 2 else ""
-            published = parts[2].strip() if len(parts) >= 3 else ""
-            posts.append((url, lastmod, published))
-    return posts
-
-
-def append_line(filepath: Path, line: str) -> None:
-    """Append one line to file (thread-safe)."""
-    filepath.parent.mkdir(parents=True, exist_ok=True)
-    with _file_lock:
-        with open(filepath, "a", encoding="utf-8") as f:
-            f.write(line + "\n")
-
-
-def filter_file_lines(filepath: Path, keep_fn: Callable[[str], bool]) -> None:
-    """Filter lines by predicate (thread-safe, in-place)."""
-    if not filepath.exists():
-        return
-    with _file_lock:
-        lines = filepath.read_text(encoding="utf-8").splitlines()
-        new_lines = [line for line in lines if keep_fn(line)]
-        filepath.write_text(
-            "\n".join(new_lines) + ("\n" if new_lines else ""), encoding="utf-8"
-        )
-
-
-def remove_lines_by_prefix(filepath: Path, prefix: str) -> None:
-    """Remove lines that start with prefix (thread-safe, in-place)."""
-    filter_file_lines(filepath, lambda line: not line.startswith(prefix))
 
 
 def eta_str(done: int, total: int, start_time: float) -> str:
@@ -327,154 +241,6 @@ def eta_str(done: int, total: int, start_time: float) -> str:
     return f"[{done:5d}/{total} | {pct:5.1f}% | Elapsed {h:02d}:{m:02d}:{s:02d}]"
 
 
-# ---------------------------------------------------------------------------
-# 공통 실패 이력 관리
-# ---------------------------------------------------------------------------
-
-
-class FailedLog:
-    """파일 기반 실패 이력 (post_url, reason)을 스레드 안전하게 관리.
-
-    download_md.py 및 download_html.py 에서 공통으로 사용된다.
-    download_images.py 는 3-tuple (post_url, img_url, reason) 구조를 사용하므로
-    별도 구현을 유지한다.
-    """
-
-    def __init__(self, filepath: Path, lock: threading.Lock) -> None:
-        self._filepath = filepath
-        self._lock = lock
-        self._cache: set[tuple[str, str]] | None = None
-
-    def _load(self) -> set[tuple[str, str]]:
-        entries: set[tuple[str, str]] = set()
-        if not self._filepath.exists():
-            return entries
-        for line in self._filepath.read_text(encoding="utf-8").splitlines():
-            parts = line.split("\t", 1)
-            if len(parts) == 2 and parts[0].strip() and parts[1].strip():
-                entries.add((parts[0].strip(), parts[1].strip()))
-        return entries
-
-    def record(self, post_url: str, reason: str) -> None:
-        """실패 항목을 기록한다. 동일 (post_url, reason) 쌍은 중복 기록하지 않는다."""
-        key = (post_url, reason)
-        with self._lock:
-            if self._cache is None:
-                self._cache = self._load()
-            if key in self._cache:
-                return
-            self._cache.add(key)
-            append_line(self._filepath, f"{post_url}\t{reason}")
-
-    def remove(self, post_url: str) -> None:
-        """post_url 에 해당하는 모든 실패 항목을 삭제한다."""
-        remove_lines_by_prefix(self._filepath, post_url + "\t")
-        with self._lock:
-            if self._cache is None:
-                self._cache = self._load()
-            self._cache = {k for k in self._cache if k[0] != post_url}
-
-    def load_post_urls(self) -> set[str]:
-        """실패 목록의 post_url 집합을 반환한다."""
-        return load_failed_post_urls(self._filepath)
-
-
-# ---------------------------------------------------------------------------
-# slug 충돌 해소 + 텍스트 파일 저장
-# ---------------------------------------------------------------------------
-
-
-def write_text_unique(
-    target_dir: Path,
-    slug: str,
-    suffix: str,
-    content: str,
-    done_map: dict[str, str],
-    done_urls: set[str],
-    post_url: str,
-    lock: threading.Lock,
-    done_file: Path,
-    force_overwrite: bool = False,
-) -> str | None:
-    """slug 충돌을 해소하며 텍스트 파일을 저장하고 done 상태를 갱신한다.
-
-    download_md.py 와 download_html.py 에서 동일하게 사용되는
-    "잠금 외부 탐색 → 잠금 내부 확정·쓰기" 패턴을 공통화한다.
-
-    1단계(잠금 외부): 동일 내용 파일 탐색 (I/O 집중 구간)
-    2단계(잠금 내부): 최종 경로 확정·쓰기·done 상태 갱신
-
-    Args:
-        force_overwrite: True 이면 동일 slug 파일이 존재하고 내용이 다를 때
-                         _2 suffix 없이 기존 파일을 덮어쓴다.
-
-    Returns:
-        실제 저장(또는 기존 일치) 파일의 slug 문자열.
-        post_url 이 already-done 상태이면 None.
-    """
-    # 빠른 비잠금 확인
-    if post_url in done_urls:
-        return None
-
-    # ── 1단계: 충돌 탐색 (잠금 외부) ──────────────────────────────────
-    path = target_dir / f"{slug}{suffix}"
-    next_idx = 2
-    if force_overwrite:
-        # force_overwrite: 기존 slug 경로를 그대로 사용 (덮어쓰기 대상)
-        pass
-    else:
-        while path.exists():
-            try:
-                if path.read_text(encoding="utf-8") == content:
-                    break  # 동일 내용 → 이 경로를 후보로 사용
-            except OSError:
-                pass
-            path = target_dir / f"{slug}_{next_idx}{suffix}"
-            next_idx += 1
-
-    # ── 2단계: 경로 확정·쓰기·상태 갱신 (잠금 내부) ───────────────────
-    actual_slug: str | None = None
-    with lock:
-        if post_url in done_urls:
-            return None  # 다른 스레드가 먼저 완료
-
-        if path.exists():
-            try:
-                on_disk = path.read_text(encoding="utf-8")
-            except OSError:
-                on_disk = None
-
-            if on_disk == content:
-                # 동일 내용 → 중복으로 처리
-                actual_slug = path.stem
-                if actual_slug not in done_map:
-                    done_map[actual_slug] = post_url
-                done_urls.add(post_url)
-            elif force_overwrite:
-                # force_overwrite: 내용이 다르면 기존 파일 덮어쓰기
-                path.write_text(content, encoding="utf-8")
-                actual_slug = path.stem
-                done_map[actual_slug] = post_url
-                done_urls.add(post_url)
-            else:
-                # 선점됨 → 잠금 내에서 빈 슬롯 탐색 후 쓰기
-                while path.exists():
-                    path = target_dir / f"{slug}_{next_idx}{suffix}"
-                    next_idx += 1
-                path.write_text(content, encoding="utf-8")
-                actual_slug = path.stem
-                done_map[actual_slug] = post_url
-                done_urls.add(post_url)
-        else:
-            path.write_text(content, encoding="utf-8")
-            actual_slug = path.stem
-            done_map[actual_slug] = post_url
-            done_urls.add(post_url)
-
-    # 잠금 해제 후 파일 I/O
-    if actual_slug is not None:
-        append_line(done_file, f"{actual_slug}\t{post_url}")
-    return actual_slug
 
 
 # ---------------------------------------------------------------------------
@@ -489,63 +255,6 @@ def url_to_slug(post_url: str) -> str:
     return raw[:120]
 
 
-# ---------------------------------------------------------------------------
-# 지연 flush 파일 버퍼 (download_images.py 고빈도 I/O 최적화)
-# ---------------------------------------------------------------------------
-
-
-class LineBuffer:
-    """스레드 안전한 지연 flush 파일 버퍼.
-
-    append_line 호출을 메모리에 누적하다가 flush_every 건 이상 쌓이면
-    자동으로 파일에 일괄 기록한다. 프로세스 종료 전 flush_all()을 반드시
-    호출해야 미기록 데이터 유실을 방지할 수 있다.
-
-    download_images.py 의 고빈도 파일(downloaded_urls.txt, image_map.tsv 등)에
-    사용하기 위해 설계됐다. 모듈 수준 append_line 과 달리 _file_lock 을 경유하지
-    않으므로 _state_lock / _save_lock 과 경합하지 않는다.
-    """
-
-    def __init__(self, filepath: Path, flush_every: int = 100) -> None:
-        self._filepath = filepath
-        self._flush_every = flush_every
-        self._buf: list[str] = []
-        self._lock = threading.Lock()
-        with _line_buffers_lock:
-            _line_buffers.append(self)
-
-    def add(self, line: str) -> None:
-        """줄을 버퍼에 추가한다. 버퍼가 flush_every 건을 초과하면 자동 flush."""
-        with self._lock:
-            self._buf.append(line)
-            if len(self._buf) >= self._flush_every:
-                self._flush_locked()
-
-    def flush_all(self) -> None:
-        """버퍼에 남은 모든 줄을 파일에 기록한다. run 종료 시 반드시 호출."""
-        with self._lock:
-            self._flush_locked()
-
-    def _flush_locked(self) -> None:
-        """_lock 보유 상태에서 호출해야 한다."""
-        if not self._buf:
-            return
-        self._filepath.parent.mkdir(parents=True, exist_ok=True)
-        with open(self._filepath, "a", encoding="utf-8") as f:
-            f.write("\n".join(self._buf) + "\n")
-        self._buf.clear()
-
-
-def flush_all_buffers() -> int:
-    """등록된 모든 LineBuffer를 플러시한다. 플러시한 버퍼 수를 반환."""
-    with _line_buffers_lock:
-        buffers = list(_line_buffers)
-    for buf in buffers:
-        try:
-            buf.flush_all()
-        except Exception:
-            pass
-    return len(buffers)
 
 
 # ---------------------------------------------------------------------------

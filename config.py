@@ -99,11 +99,11 @@ for _lang, _host in MULTILANG_BLOG_HOSTS.items():
     MULTILANG_CONFIGS[_lang] = {
         "sitemap_posts": f"{_base}/sitemap-posts.xml",
         "sitemap_pages": f"{_base}/sitemap-pages.xml",
-        "all_posts": ROOT_DIR / f"all_posts_{_lang}.txt",
-        "all_pages": ROOT_DIR / f"all_pages_{_lang}.txt",
-        "all_links": ROOT_DIR / f"all_links_{_lang}.txt",
+        "all_posts": ROOT_DIR / f"all_posts_{_lang}.csv",
+        "all_pages": ROOT_DIR / f"all_pages_{_lang}.csv",
+        "all_links": ROOT_DIR / f"all_links_{_lang}.csv",
         "html_dir": ROOT_DIR / f"html_{_lang}",
-        "done_html": ROOT_DIR / f"done_html_{_lang}.txt",
+        "done_html": ROOT_DIR / f"done_html_{_lang}.csv",
     }
 
 # ── 카테고리 ──────────────────────────────────────────────────────────────

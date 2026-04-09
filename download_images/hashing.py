@@ -4,6 +4,7 @@
 import hashlib
 from pathlib import Path
 
+from log_io import _is_header, _split_row, csv_line
 from utils import ROOT_DIR
 
 from .constants import (
@@ -54,14 +55,14 @@ def _load_or_build_img_hashes() -> tuple[dict[str, str], set[str]]:
 
     if IMG_HASH_FILE.exists():
         for line in IMG_HASH_FILE.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if not line:
+            line = line.strip().lstrip("\ufeff")
+            if not line or _is_header(line, "hash,relative_path,is_thumb"):
                 continue
-            parts = line.split("\t")
+            parts = _split_row(line)
             if len(parts) >= 2:
-                h = parts[0].strip()
-                rel = parts[1].strip()
-                is_thumb = parts[2].strip() == "T" if len(parts) >= 3 else False
+                h = parts[0]
+                rel = parts[1]
+                is_thumb = parts[2] == "T" if len(parts) >= 3 else False
                 if h and rel:
                     img_hashes[h] = rel
                     if is_thumb:
@@ -92,7 +93,7 @@ def _load_or_build_img_hashes() -> tuple[dict[str, str], set[str]]:
     # 캐시 파일 작성
     ROOT_DIR.mkdir(parents=True, exist_ok=True)
     lines = [
-        f"{h}\t{rel}\t{'T' if h in thumb_hashes else ''}"
+        csv_line(h, rel, "T" if h in thumb_hashes else "")
         for h, rel in img_hashes.items()
     ]
     IMG_HASH_FILE.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")

@@ -9,6 +9,7 @@ import urllib.parse
 from bs4 import BeautifulSoup, Tag
 from markitdown import MarkItDown
 
+from log_io import csv_line
 from utils import (
     DEFAULT_MAX_WORKERS,
     ROOT_DIR,
@@ -27,10 +28,10 @@ from utils import (
     write_text_unique,
 )
 MD_DIR = ROOT_DIR / "md"
-DONE_FILE = ROOT_DIR / "done_md.txt"
-FAILED_FILE = ROOT_DIR / "failed_md.txt"
-IMAGE_MAP_FILE = ROOT_DIR / "image_map.tsv"
-STALE_FILE = ROOT_DIR / "stale_md.txt"
+DONE_FILE = ROOT_DIR / "done_md.csv"
+FAILED_FILE = ROOT_DIR / "failed_md.csv"
+IMAGE_MAP_FILE = ROOT_DIR / "image_map.csv"
+STALE_FILE = ROOT_DIR / "stale_md.csv"
 
 # post_to_md에서 사용하는 사전 컴파일 정규식
 _TITLE_CLASS_RE = re.compile(r"post-title|article-title", re.I)
@@ -265,7 +266,7 @@ def process_post(
         return False
 
     if stale_buf and unmapped:
-        stale_buf.add(f"{post_url}\t{'|'.join(unmapped)}")
+        stale_buf.add(csv_line(post_url, "|".join(unmapped)))
 
     return True
 
@@ -307,11 +308,11 @@ def run_md(
             print(f"[MD] stale {len(stale)}개 항목, refresh 대상 없음")
 
     # ── stale 파일 재작성 (처리 중 새로 기록) ──────────────────────────
-    STALE_FILE.write_text("", encoding="utf-8")
-    stale_buf = LineBuffer(STALE_FILE, flush_every=50)
+    STALE_FILE.unlink(missing_ok=True)
+    stale_buf = LineBuffer(STALE_FILE, flush_every=50, header="post_url,unmapped_urls")
     for url, unmapped in stale.items():
         if url not in refresh_urls:
-            stale_buf.add(f"{url}\t{'|'.join(unmapped)}")
+            stale_buf.add(csv_line(url, "|".join(unmapped)))
 
     process_fn = lambda url, date: process_post(
         url, date, done_slugs, done_urls, image_map,
@@ -338,7 +339,7 @@ if __name__ == "__main__":
     parser.add_argument("--retry", action="store_true", help="Retry failed list")
     parser.add_argument(
         "--posts",
-        default=str(ROOT_DIR / "all_posts.txt"),
+        default=str(ROOT_DIR / "all_posts.csv"),
         help="Posts list file",
     )
     args = parser.parse_args()

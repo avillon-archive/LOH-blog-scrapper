@@ -6,7 +6,7 @@
 
 ## --retry 재처리
 
-1. `failed_images.txt`에서 고유 포스트 URL 추출 → 각 포스트의 모든 이미지 재처리
+1. `failed_images.csv`에서 고유 포스트 URL 추출 → 각 포스트의 모든 이미지 재처리
 2. 이전 성공 이미지는 `seen_urls` 히트 → `"already"`(ok) → `remove_from_failed_batch()`로 해당 failed 엔트리 제거
 3. 모든 이미지 ok(fail=0)이면 `done_post_urls`에 추가
 4. **저장=0이어도** `"already"` 처리로 failed 엔트리가 줄어들어 다음 --retry 대상 감소
@@ -23,7 +23,7 @@
 
 ### 실패 이미지 필터링
 
-`failed_images.txt`에서 포스트 단위가 아닌 **이미지 단위**로 필터링. `load_failed_image_entries()` → `{post_url: set[clean_img_url] | None}`. `None`은 `fetch_post_failed`(전체 재시도). 이미 성공한 이미지는 스킵.
+`failed_images.csv`에서 포스트 단위가 아닌 **이미지 단위**로 필터링. `load_failed_image_entries()` → `{post_url: set[clean_img_url] | None}`. `None`은 `fetch_post_failed`(전체 재시도). 이미 성공한 이미지는 스킵.
 
 ### Kakao PF 폴백
 
@@ -33,7 +33,7 @@ Kakao PF API(`pf.kakao.com`, 프로필 `_YXZqxb`)에서 인증 없이 게시글 
 
 ### 다국어 Wayback 폴백
 
-EN/JA `all_links_{lang}.txt`에서 published_date 기반 인덱스 구축. `--retry-fallback` 실행 시에만 EN/JA HTML 다운로드·인덱스 구축이 수행된다. 캐시: `multilang_published_index.json` (all_links + html_dir mtime 비교로 갱신 판단).
+EN/JA `all_links_{lang}.csv`에서 published_date 기반 인덱스 구축. `--retry-fallback` 실행 시에만 EN/JA HTML 다운로드·인덱스 구축이 수행된다. 캐시: `multilang_published_index.json` (all_links + html_dir mtime 비교로 갱신 판단).
 
 #### 후보 스코어링
 
@@ -56,16 +56,8 @@ Kakao + multilang 동시 시도. 둘 다 성공 시 **파일 크기가 큰 쪽**
 
 ### 폴백 로그
 
-| 파일 | 역할 |
-|------|------|
-| `fallback_downloaded_urls.txt` | seen_key 트래킹 (재실행 시 중복 방지) |
-| `fallback_image_map.tsv` | 원본 URL → 저장 경로 매핑 |
-| `fallback_image_hashes.tsv` | SHA256 → 저장 경로 (해시 중복 제거) |
-| `fallback_multilang.tsv` | multilang 소스 추적 (마지막 컬럼: phase A/A2/B) |
-| `fallback_kakao_pf.tsv` | kakao 소스 추적 (마지막 컬럼: kakao) |
-| `fallback_report.csv` | 성공 건 요약 리포트 |
-| `fallback_still_failed.tsv` | fallback 후에도 남은 실패 목록 |
+폴백 로그 파일 인벤토리는 [CONTEXT_LOG.md](CONTEXT_LOG.md) 참조.
 
 ### 잔여 실패 리포트
 
-`_generate_still_failed_report()`: `failed_images.txt` 전체에서 `fallback_multilang.tsv` + `fallback_kakao_pf.tsv`의 성공분을 빼고 `fallback_still_failed.tsv`에 기록. 폴백 완료 후 자동 생성.
+`_generate_still_failed_report()`: `failed_images.csv` 전체에서 `fallback_multilang.csv` + `fallback_kakao_pf.csv`의 성공분을 빼고 `fallback_still_failed.csv`에 기록. 폴백 완료 후 자동 생성.

@@ -1,15 +1,24 @@
-loh_blog/
-config.toml
+# Python
 __pycache__/
-.venv
-.claude/*.json
-.vscode/
-.editorconfig
 *.pyc
 *.pyo
-.env
+.venv
+
+# 설정
+config.toml
+.vscode/
 .editorconfig
-*.note
-*.txt
-!requirements.txt
+.env
+
+# 산출물
+loh_blog/
+
+# Migration / Backfill (일회성 스크립트)
 backfill_stale.py
+migrate_logs.py
+
+# 개인
+*.note
+
+# Claude Code
+.claude/*.json

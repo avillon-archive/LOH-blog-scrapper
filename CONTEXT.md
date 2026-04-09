@@ -2,7 +2,7 @@
 
 `blog-ko.lordofheroes.com` 전체 포스트(~2,200개)의 이미지·MD·HTML을 로컬에 저장하는 Python 스크래퍼.
 
-> 모듈별 상세: [CONTEXT_UTILS.md](CONTEXT_UTILS.md) · [CONTEXT_IMAGES.md](CONTEXT_IMAGES.md) · [CONTEXT_RUN.md](CONTEXT_RUN.md) · [CONTEXT_HTML_LOCAL.md](CONTEXT_HTML_LOCAL.md)
+> 모듈별 상세: [CONTEXT_UTILS.md](CONTEXT_UTILS.md) · [CONTEXT_LOG.md](CONTEXT_LOG.md) · [CONTEXT_IMAGES.md](CONTEXT_IMAGES.md) · [CONTEXT_RUN.md](CONTEXT_RUN.md) · [CONTEXT_HTML_LOCAL.md](CONTEXT_HTML_LOCAL.md)
 
 ---
 
@@ -10,7 +10,7 @@
 
 모든 설정 상수는 `config.py`에서 중앙 관리. TOML 로딩 우선순위: `config.toml` → `config.default.toml` → 하드코딩 기본값.
 
-`config.py`는 stdlib만 사용 (`tomllib`, `re`, `pathlib`) → 순환 import 없음. 다른 모듈은 `config`에서 직접 import하거나 `utils.py`/`download_images/constants.py`의 re-export를 통해 접근.
+`config.py`는 stdlib만 사용 (`tomllib`, `re`, `pathlib`) → 순환 import 없음. 다른 모듈은 `config`에서 직접 import하거나 `utils.py`/`log_io.py`/`download_images/constants.py`의 re-export를 통해 접근.
 
 TOML 섹션: `[paths]`, `[network]`, `[urls]`, `[categories]`, `[file_types]`. `blog_base`, `sitemap URL`, `BLOG_HOST_RE` 등은 `blog_host`에서 파생. `TAG_SLUG_TO_CATEGORY`, `KO_TO_LANG_CAT`는 `[categories.tags]`에서 자동 생성.
 
@@ -18,7 +18,7 @@ TOML 섹션: `[paths]`, `[network]`, `[urls]`, `[categories]`, `[file_types]`. `
 
 ## 파이프라인
 
-의존 관계: **html → images → {md, html-local}**. md와 html-local은 상호 의존 없음 (둘 다 `image_map.tsv`를 참조).
+의존 관계: **html → images → {md, html-local}**. md와 html-local은 상호 의존 없음 (둘 다 `image_map.csv`를 참조).
 
 실행 순서: `("html", "images", "md", "html-local")` 고정. html은 `--images`나 `--md`만 지정해도 항상 포함 (로컬 캐시 구축). html-local은 명시적 지정 또는 전체 실행 시에만 포함.
 
@@ -28,7 +28,7 @@ TOML 섹션: `[paths]`, `[network]`, `[urls]`, `[categories]`, `[file_types]`. `
 
 ```
 ./loh_blog/
-  all_links.txt              ← all_posts + all_pages 병합 (기본 소스, 날짜 내림차순)
+  all_links.csv              ← all_posts + all_pages 병합 (기본 소스, 날짜 내림차순)
   images/{카테고리}/YYYY/MM/  ← 본문 이미지
   images/etc/YYYY/MM/        ← 카테고리 없는 이미지
   images_fallback/            ← --retry-fallback 보존용 폴백 이미지
@@ -38,7 +38,7 @@ TOML 섹션: `[paths]`, `[network]`, `[urls]`, `[categories]`, `[file_types]`. `
   html_local/[카테고리/]     ← 오프라인 열람용 HTML
 ```
 
-트래킹 파일: `done_*.txt`(완료), `failed_*.txt`(실패), `stale_*.txt`(재생성 대상), `downloaded_urls.txt`, `image_map.tsv`, `image_hashes.tsv`.
+트래킹 파일: 모두 CSV 형식 (utf-8-sig, 헤더 포함). 상세 인벤토리는 [CONTEXT_LOG.md](CONTEXT_LOG.md) 참조.
 
 ### 안전 중단
 
@@ -68,11 +68,11 @@ TOML 섹션: `[paths]`, `[network]`, `[urls]`, `[categories]`, `[file_types]`. `
 - 제목 탐색: `h1.post-title` → `h1` → `og:title` 순.
 - 본문 탐색: `section.post-content` → `div.post-content` → `article` → `main` 순.
 - `_flatten_nested_inline(body)`: Ghost CMS의 중첩 inline 태그(`<strong><strong>...</strong></strong>`) 평탄화. markitdown에서 `**********text**********` 마커 누적 방지.
-- `image_map.tsv` 기반 이미지 상대경로. `img_prefix`는 MD 파일의 ROOT_DIR 기준 depth로 계산 (`md/` → `"../"`, `md/카테고리/` → `"../../"`). 미등록 이미지는 절대 URL.
+- `image_map.csv` 기반 이미지 상대경로. `img_prefix`는 MD 파일의 ROOT_DIR 기준 depth로 계산 (`md/` → `"../"`, `md/카테고리/` → `"../../"`). 미등록 이미지는 절대 URL.
 
 ### stale 추적 (image_map 갱신 시 선택적 재생성)
 
-`stale_md.txt`에 image_map에 없어서 절대 URL로 남은 이미지의 `clean_url`을 포스트별 기록 (`post_url\turl1|url2|...`). 다음 `run_md` 실행 시 stale 항목과 현재 image_map을 대조하여, 이제 매핑 가능해진 포스트만 자동 재생성. `backfill_stale.py`로 기존 파일에서 초기 구축.
+`stale_md.csv`에 image_map에 없어서 절대 URL로 남은 이미지의 `clean_url`을 포스트별 기록. 다음 `run_md` 실행 시 stale 항목과 현재 image_map을 대조하여, 이제 매핑 가능해진 포스트만 자동 재생성. `backfill_stale.py`로 기존 파일에서 초기 구축.
 
 ### MD 헤더 형식
 

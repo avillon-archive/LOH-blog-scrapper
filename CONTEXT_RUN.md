@@ -11,8 +11,8 @@
 | `--html-local` | 오프라인 열람용 HTML 생성 |
 | `--retry` | 실패 목록 재처리 (원본/Wayback만) |
 | `--retry-fallback` | 실패 이미지 multilang/kakao 폴백 (별도 디렉토리에 보존) |
-| `--posts` | all_posts.txt를 소스로 사용 (사이트맵 갱신 건너뜀) |
-| `--pages` | all_pages.txt를 소스로 사용 (사이트맵 갱신 건너뜀) |
+| `--posts` | all_posts.csv를 소스로 사용 (사이트맵 갱신 건너뜀) |
+| `--pages` | all_pages.csv를 소스로 사용 (사이트맵 갱신 건너뜀) |
 | `--custom` | custom_posts.txt를 소스로 사용 (사이트맵 갱신 건너뜀) |
 | `--force` | 기존 기록 무시, 전체 재다운로드 |
 | `--sample N` | 랜덤 샘플 (행 수의 10% 상한) |
@@ -27,7 +27,7 @@
 ## CLI 옵션 제약
 
 - `--posts`, `--pages`, `--custom`은 상호 배타적.
-- `--sample N`: `all_links.txt` 유효 행 수의 **10%를 상한**으로 클램핑. `--posts`/`--pages`/`--custom`과 동시 불가.
+- `--sample N`: `all_links.csv` 유효 행 수의 **10%를 상한**으로 클램핑. `--posts`/`--pages`/`--custom`과 동시 불가.
 - `--retry`: 원본/Wayback만. `--retry-fallback`: multilang/kakao 폴백 (별도 파이프라인, `images_fallback/`에 보존).
 
 ## 동적 워커·rate limit
@@ -41,7 +41,7 @@ posts > 100건: workers = default_max_workers (기본 8), rate_limit = blog_rate
 
 ## 사이트맵 갱신
 
-**기본 모드**: `all_links.txt` 첫 줄 날짜 vs `fetch_newest_sitemap_date()`(posts+pages 양쪽 최대값). 불일치 시 전체 재빌드. pages 갱신 실패 시에도 기존 `all_pages.txt`로 links 생성 시도.
+**기본 모드**: `all_links.csv` 첫 줄 날짜 vs `fetch_newest_sitemap_date()`(posts+pages 양쪽 최대값). 불일치 시 전체 재빌드. pages 갱신 실패 시에도 기존 `all_pages.csv`로 links 생성 시도.
 
 **`--posts`/`--pages`**: `_maybe_refresh_single()`로 해당 사이트맵만 개별 체크.
 
