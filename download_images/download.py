@@ -167,8 +167,31 @@ def download_one_image(
             _done_buf.add(seen_key)
             remove_from_failed(post_url, img_url=img_url)
             return "override"
-        else:
-            print(f"  [override] target 미발견: {override_target[:80]}")
+        # target이 로컬에 없으면 target URL에서 직접 다운로드 시도
+        payload = _fetch_image(override_target)
+        if payload is None:
+            payload = _fetch_wayback_image(override_target)
+        if payload is not None:
+            content, final_url, ctype, cd = payload
+            content_hash = _sha256_bytes(content)
+            filename = _determine_filename(utype, override_target, final_url, ctype, cd, idx)
+            safe_name = _safe_filename(filename)
+            folder.mkdir(parents=True, exist_ok=True)
+            with _save_lock:
+                saved_name = save_image(content, safe_name, folder)
+            rel = (folder / saved_name).relative_to(ROOT_DIR).as_posix()
+            with _state_lock:
+                seen_urls.add(seen_key)
+                image_map[clean_url] = rel
+                image_map[target_clean] = rel
+                img_hashes[content_hash] = rel
+            _map_buf.add(csv_line(clean_url, rel))
+            _map_buf.add(csv_line(target_clean, rel))
+            _done_buf.add(seen_key)
+            _img_hash_buf.add(csv_line(content_hash, rel, "T" if utype == "og_image" else ""))
+            remove_from_failed(post_url, img_url=img_url)
+            return "override"
+        print(f"  [override] 다운로드 실패: {override_target[:80]}")
 
     # ── 다운로드 단계 (잠금 외부 – 네트워크 I/O) ──────────────────────────
     payload: tuple[bytes, str, str, str] | None = None

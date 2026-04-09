@@ -52,7 +52,7 @@ URL 정규화: `clean_url()` (utils.py)이 모든 정규화를 담당. Ghost CMS
 
 ## Wayback 캐시
 
-- `_wayback_oldest(url)`: CDX API 조회. 입력 URL은 `collect` 단계에서 이미 정규화됨. 동일 URL 동시 요청 시 `_wayback_events`로 선착 스레드만 fetch, 나머지 대기 후 캐시 사용.
+- `_wayback_oldest(url)`: CDX API 조회. 입력 URL은 `collect` 단계에서 이미 정규화됨. 동일 URL 동시 요청 시 `_wayback_events`로 선착 스레드만 fetch, 나머지 대기 후 캐시 사용. `community-ko-cdn` URL이 CDX에 없으면 구 포럼 경로(`community-ko.lordofheroes.com/storage/app/public/media/...`)로 자동 재조회.
 - `_fetch_wayback_post_soup`: `resp.encoding = resp.apparent_encoding or "utf-8"`로 인코딩 보정 (Wayback 래퍼의 부정확한 헤더 대응).
 - `_fetch_wayback_gdrive_from_post`: `src` 및 `data-src` 모두 확인 (lazy-load 이미지가 Wayback 스냅샷에 `data-src`로만 남는 경우).
 

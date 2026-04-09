@@ -12,6 +12,7 @@ from utils import fetch_with_retry
 
 from .constants import (
     _ARCHIVE_CONTENT_TYPES,
+    COMMUNITY_CDN_HOST,
     GDRIVE_HOSTS,
     IMG_EXTS,
     WAYBACK_CDX_API,
@@ -172,6 +173,21 @@ def _fetch_image(
                               allow_archive=allow_archive, min_bytes=min_bytes)
 
 
+_COMMUNITY_FORUM_HOST = "community-ko.lordofheroes.com"
+_COMMUNITY_FORUM_PREFIX = "/storage/app/public/media"
+
+
+def _cdn_to_forum_url(url: str) -> str | None:
+    """community-ko-cdn URL을 구 포럼 URL로 변환. 해당 없으면 None."""
+    parsed = urllib.parse.urlparse(url)
+    if (parsed.hostname or "").lower() != COMMUNITY_CDN_HOST:
+        return None
+    return parsed._replace(
+        netloc=_COMMUNITY_FORUM_HOST,
+        path=_COMMUNITY_FORUM_PREFIX + parsed.path,
+    ).geturl()
+
+
 def _fetch_wayback_image(
     url: str,
     *,
@@ -180,6 +196,11 @@ def _fetch_wayback_image(
     min_bytes: int = 1,
 ) -> tuple[bytes, str, str, str] | None:
     wayback_url = _wayback_oldest(url)
+    if not wayback_url:
+        # CDN URL이면 구 포럼 경로로 Wayback 재시도
+        forum_url = _cdn_to_forum_url(url)
+        if forum_url:
+            wayback_url = _wayback_oldest(forum_url)
     if not wayback_url:
         return None
 

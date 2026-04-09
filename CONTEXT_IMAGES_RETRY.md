@@ -11,9 +11,17 @@
 3. 모든 이미지 ok(fail=0)이면 `done_post_urls`에 추가
 4. **저장=0이어도** `"already"` 처리로 failed 엔트리가 줄어들어 다음 --retry 대상 감소
 
+### 알려진 엣지 케이스
+
+파일 잠금 등으로 이미지는 디스크에 저장됐지만 로그(`image_map`, `downloaded_urls`, `image_hashes`)가 갱신되지 않은 경우, 재실행 시 다시 다운로드하여 복구된다. 단, 재실행 전에 **소스가 영구히 죽으면**(Wayback URL 삭제 등) 디스크에 파일은 있지만 트래킹에서 빠진 고아 파일이 된다. 파일명은 다운로드 응답에서 결정되므로 다운로드 없이 디스크 매칭은 불가. 또한 해시도 미기록이므로 파일 무결성 검증 수단이 없다. `requests`는 응답 전체 수신 후 `content`를 반환하므로 네트워크 중단 시 파일 저장까지 도달하지 않지만, 서버가 잘린 응답을 200 OK로 반환한 극단적 경우에는 손상 파일이 남을 수 있다. 발생 확률은 극히 낮으나, 의심 시 `images/` 디렉토리와 `image_map.csv`를 비교하여 고아 파일을 찾고, 이미지 뷰어로 수동 확인 가능.
+
+### community CDN → 구 포럼 URL 자동 변환
+
+`community-ko-cdn` URL이 Wayback CDX에 없으면, `_fetch_wayback_image`가 구 포럼 경로(`community-ko.lordofheroes.com/storage/app/public/media/...`)로 자동 재조회. 블로그 이전 전 포럼 시절의 이미지가 Wayback에 보존된 경우 복구 가능. `--images`, `--retry` 모두 적용.
+
 ### 이미지 오버라이드
 
-`config.toml`의 `[image_overrides]`로 영구 깨진 URL → 블로그 URL 수동 매핑. `--retry` 실행 시 `download_one_image()` 진입부에서 체크, `image_map`에 기록 + `failed_images`에서 제거. 다음 `html_local` 실행 시 stale 추적으로 자동 반영.
+`config.toml`의 `[image_overrides]`로 영구 깨진 URL → 블로그 URL 수동 매핑. `--retry` 실행 시 `download_one_image()` 진입부에서 체크, `image_map`에 기록 + `failed_images`에서 제거. target이 로컬에 없으면 target URL에서 직접 다운로드(Wayback 포함). 다음 `html_local` 실행 시 stale 추적으로 자동 반영.
 
 ---
 
