@@ -1,21 +1,17 @@
 # -*- coding: utf-8 -*-
-"""파일 저장, seen/done/failed 헬퍼, backfill."""
+"""파일 저장, seen/done/failed 헬퍼."""
 
-import re
 from pathlib import Path
 
 from log_io import _is_header, _split_row, csv_line
-from utils import ROOT_DIR, append_line, load_image_map
+from utils import ROOT_DIR, append_line
 
 from .constants import (
     DONE_FILE,
     DONE_POSTS_FILE,
-    DOWNLOADABLE_EXTS,
-    IMAGE_MAP_FILE,
-    IMAGES_DIR,
 )
 from .state import _failed_log
-from .url_utils import _basename, _clean_img_url, _safe_filename
+from .url_utils import _safe_filename
 
 
 def save_image(content: bytes, filename: str, folder: Path) -> str:
@@ -45,26 +41,6 @@ def save_image(content: bytes, filename: str, folder: Path) -> str:
     return target.name
 
 
-def record_image_map(
-    clean_url_key: str,
-    relative_path: str,
-    image_map: dict[str, str],
-    filepath: Path,
-):
-    """image_map 딕셔너리와 파일에 항목을 추가한다 (중복 방지).
-
-    backfill_image_map 전용. download_one_image 는 _state_lock + _map_buf 를 직접 사용.
-    """
-    if not clean_url_key or not relative_path:
-        return
-    existing = image_map.get(clean_url_key)
-    if existing == relative_path:
-        return
-    image_map[clean_url_key] = relative_path
-    ROOT_DIR.mkdir(parents=True, exist_ok=True)
-    append_line(filepath, csv_line(clean_url_key, relative_path),
-                header="clean_url,relative_path")
-
 
 # ---------------------------------------------------------------------------
 # done / failed 파일 헬퍼
@@ -86,13 +62,6 @@ def _load_done_post_urls(filepath: Path) -> dict[str, int]:
         result[url] = count
     return result
 
-
-def _parse_done_line_to_main_url(row: str) -> str | None:
-    if row.startswith("thumb:"):
-        return None
-    if row.startswith("main:"):
-        return row.split(":", 1)[1].strip() or None
-    return row.strip() or None
 
 
 def load_seen(filepath: Path) -> set[str]:
@@ -152,54 +121,3 @@ def remove_from_failed(post_url: str, reason: str | None = None,
 
 def remove_from_failed_batch(post_url: str, img_urls: set[str]) -> None:
     _failed_log.remove_batch(post_url, img_urls)
-
-
-# ---------------------------------------------------------------------------
-# backfill (--backfill-map 옵션)
-# ---------------------------------------------------------------------------
-
-
-def backfill_image_map() -> None:
-    ROOT_DIR.mkdir(parents=True, exist_ok=True)
-    image_map = load_image_map(IMAGE_MAP_FILE)
-
-    files = [
-        f
-        for f in IMAGES_DIR.rglob("*")
-        if f.is_file()
-        and f.suffix.lower() in DOWNLOADABLE_EXTS
-        and "thumbnails" not in f.relative_to(IMAGES_DIR).parts
-    ]
-
-    by_name: dict[str, list[Path]] = {}
-    for f in files:
-        by_name.setdefault(f.name, []).append(f)
-
-    added = 0
-    if DONE_FILE.exists():
-        for line in DONE_FILE.read_text(encoding="utf-8").splitlines():
-            url = _parse_done_line_to_main_url(line.strip())
-            if not url:
-                continue
-            key = _clean_img_url(url)
-            if key in image_map:
-                continue
-            base = _basename(url)
-            if not base:
-                continue
-            candidates = by_name.get(base, [])
-            if not candidates:
-                stem = Path(base).stem
-                suffix = Path(base).suffix
-                pattern = re.compile(rf"^{re.escape(stem)}(?:_\d+)?{re.escape(suffix)}$")
-                for name, name_paths in by_name.items():
-                    if pattern.match(name):
-                        candidates.extend(name_paths)
-            if not candidates:
-                continue
-            chosen = sorted(candidates, key=lambda x: str(x))[0]
-            rel = chosen.relative_to(ROOT_DIR).as_posix()
-            record_image_map(key, rel, image_map, IMAGE_MAP_FILE)
-            added += 1
-
-    print(f"[MAP] backfill added={added} total={len(image_map)}")

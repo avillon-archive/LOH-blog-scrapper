@@ -8,7 +8,6 @@
 python -m download_images                    # 전체 이미지 수집
 python -m download_images --retry            # 실패 재처리
 python -m download_images --retry-fallback   # multilang/kakao 폴백
-python -m download_images --backfill-map     # image_map.csv 누락 보충
 ```
 
 ---
