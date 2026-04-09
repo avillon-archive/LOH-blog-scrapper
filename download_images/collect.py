@@ -47,6 +47,8 @@ def collect_image_urls(soup: BeautifulSoup, post_url: str) -> list[tuple[str, st
     for img in content_tag.find_all("img"):
         if "author-profile-image" in (img.get("class") or []):
             continue
+        if "kg-bookmark-icon" in (img.get("class") or []):
+            continue
         if img.find_parent("div", class_="author-card"):
             continue
         src = img.get("src") or img.get("data-src") or ""

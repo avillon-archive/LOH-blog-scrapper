@@ -2,7 +2,7 @@
 
 ## URL 정규화
 
-`clean_url(url)`: 모든 URL 정규화의 단일 진입점. 적용 순서: ①`?ref=` 파라미터 제거 (Ghost CMS 추적용), ②`/size/wN` 경로 제거 (원본 해상도 확보), ③clovergames CDN `/p/`→`/o/` 변환 (프리뷰→원본), ④trailing slash 제거. `image_map.tsv` 키 생성, html_local 이미지/앵커 리라이트 모두 이 함수를 경유.
+`clean_url(url)`: 모든 URL 정규화의 단일 진입점. 적용 순서: ①`?ref=` 파라미터 제거 (Ghost CMS 추적용), ②`/size/wNhN` 리사이즈 경로 제거 (원본 해상도 확보, `w600`, `w256h256` 등), ③clovergames CDN `/p/`→`/o/` 변환 (프리뷰→원본), ④trailing slash 제거. `image_map.tsv` 키 생성, html_local 이미지/앵커 리라이트 모두 이 함수를 경유.
 
 ---
 
@@ -17,7 +17,7 @@
 
 `download_md.py` / `download_html.py` / `download_html_local.py` 공통 `(post_url, reason)` 2-tuple 실패 관리.
 
-**스레드 안전 패턴**: lock 내부에서 in-memory 캐시 갱신, lock 외부에서 파일 기록. `append_line` 내부 `_file_lock`이 원자성 보장.
+**스레드 안전 패턴**: lock 내부에서 in-memory 캐시 갱신 + 파일 기록을 원자적으로 수행.
 
 ---
 

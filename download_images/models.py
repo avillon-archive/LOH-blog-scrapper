@@ -88,7 +88,7 @@ class ImageFailedLog:
             if key in self._cache:
                 return
             self._cache.add(key)
-        append_line(self._filepath, f"{post_url}\t{img_url}\t{reason}")
+            append_line(self._filepath, f"{post_url}\t{img_url}\t{reason}")
 
     def remove(self, post_url: str, reason: str | None = None,
                img_url: str | None = None) -> None:

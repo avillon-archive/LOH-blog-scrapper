@@ -97,7 +97,7 @@ def extract_category(soup: "BeautifulSoup") -> str:
     return ""
 
 
-SIZE_W_RE = re.compile(r"/size/w\d+", re.IGNORECASE)
+SIZE_W_RE = re.compile(r"/size/w\d+(?:h\d+)?", re.IGNORECASE)
 _CLOVERGAMES_PREVIEW_RE = re.compile(
     r"(cdn\.clovergames\.io/image/loh/[a-z]{2})/p/",
 )
@@ -364,7 +364,7 @@ class FailedLog:
             if key in self._cache:
                 return
             self._cache.add(key)
-        append_line(self._filepath, f"{post_url}\t{reason}")
+            append_line(self._filepath, f"{post_url}\t{reason}")
 
     def remove(self, post_url: str) -> None:
         """post_url 에 해당하는 모든 실패 항목을 삭제한다."""
