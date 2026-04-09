@@ -17,10 +17,12 @@ Usage:
   python run_all.py --custom
   python run_all.py --custom --images
   python run_all.py --html-local
+  python run_all.py --clean-fallback
 """
 
 import argparse
 import random
+import shutil
 import signal
 import sys
 import time
@@ -267,9 +269,49 @@ def main():
     )
     parser.add_argument("--force", action="store_true",
                         help="기존 기록 무시하고 전체 재다운로드 (done 기록 무시)")
+    parser.add_argument("--clean-fallback", action="store_true",
+                        help="fallback 산출물 전체 삭제 (images_fallback/ + fallback CSV/로그)")
     parser.add_argument("--sample", type=int, help="테스트용 랜덤 샘플 개수 (all_links.txt 행 수의 10%% 상한 적용)")
     parser.add_argument("--seed", type=int, help="샘플링 고정 시드(선택)")
     args = parser.parse_args()
+
+    # ── --clean-fallback: fallback 산출물 삭제 후 즉시 종료 ──────────────
+    if args.clean_fallback:
+        from download_images.constants import (
+            FALLBACK_IMAGES_DIR,
+            FALLBACK_DONE_FILE,
+            FALLBACK_IMAGE_MAP_FILE,
+            FALLBACK_IMG_HASH_FILE,
+            FALLBACK_MULTILANG_LOG_FILE,
+            FALLBACK_KAKAO_PF_LOG_FILE,
+            FALLBACK_STILL_FAILED_FILE,
+            FALLBACK_REPORT_FILE,
+        )
+        targets = [
+            FALLBACK_IMAGES_DIR,
+            FALLBACK_DONE_FILE,
+            FALLBACK_IMAGE_MAP_FILE,
+            FALLBACK_IMG_HASH_FILE,
+            FALLBACK_MULTILANG_LOG_FILE,
+            FALLBACK_KAKAO_PF_LOG_FILE,
+            FALLBACK_STILL_FAILED_FILE,
+            FALLBACK_REPORT_FILE,
+        ]
+        deleted = 0
+        for p in targets:
+            if not p.exists():
+                continue
+            if p.is_dir():
+                shutil.rmtree(p)
+            else:
+                p.unlink()
+            print(f"  삭제: {p.name}")
+            deleted += 1
+        if deleted:
+            print(f"\n[clean-fallback] {deleted}개 항목 삭제 완료")
+        else:
+            print("[clean-fallback] 삭제할 fallback 파일이 없습니다")
+        return
 
     # ── 인수 유효성 검사 ────────────────────────────────────────────────
     if args.sample is not None and args.sample <= 0:

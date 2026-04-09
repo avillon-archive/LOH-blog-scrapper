@@ -25,7 +25,7 @@ python -m download_images --backfill-map     # image_map.csv 누락 보충
 
 URL 정규화: `clean_url()` (utils.py)이 모든 정규화를 담당. Ghost CMS `?ref=` 파라미터 제거, `/size/wNhN` 리사이즈 경로 제거(`w600`, `w256h256` 등), clovergames CDN `/p/`→`/o/` 변환(프리뷰→원본), trailing slash 제거. `_clean_img_url(url)`은 `clean_url()`의 얇은 래퍼.
 
-`<img>` 수집 시 제외: `author-profile-image`, `kg-bookmark-icon` 클래스, `author-card` 내부. 수집 대상 호스트: `BLOG_HOST`(`/content/images/` 경로), `COMMUNITY_CDN_HOST`(`community-ko-cdn.lordofheroes.com`), `GAME_CDN_HOST`(`cdn.clovergames.io`). Google Drive 호스트는 `gdrive` 타입으로 별도 수집. `/spreadsheets/`, `/forms/` 경로와 `_SKIP_LINK_HOSTS` 도메인은 건너뜀.
+`<img>` 수집 시 제외: `author-profile-image`, `kg-bookmark-icon` 클래스, `author-card` 내부. 수집 대상 호스트: `BLOG_HOST`(`/content/images/` 경로), `COMMUNITY_CDN_HOST`(`community-ko-cdn.lordofheroes.com`), `COMMUNITY_SITE_HOST`(`community-ko.lordofheroes.com`), `GAME_CDN_HOST`(`cdn.clovergames.io`). Google Drive/이미지 호스트는 `is_gdrive_host()` (config.py)로 판별 — `gdrive_hosts` set 매칭 + `*.googleusercontent.com` 자동 인식(lh3~lh6 등 번호 무관). `/spreadsheets/`, `/forms/` 경로와 `_SKIP_LINK_HOSTS` 도메인은 건너뜀.
 
 `_detect_non_image_urls(soup, post_url)`: GDrive 앵커 주변에서 BGM/OST 등 비이미지 키워드 감지 시 제외. 검사 범위: ①앵커 텍스트, ②같은 부모 블록 내 이전 sibling(200자), ③content_tag **내부**의 이전 heading. content_tag 외부 heading은 무시.
 

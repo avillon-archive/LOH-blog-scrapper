@@ -21,11 +21,12 @@ max_retries = 3
 blog_host = "blog-ko.lordofheroes.com"
 # blog_base, blog_image_prefix, sitemap URL 등은 blog_host 에서 자동 파생
 wayback_cdx_api = "https://web.archive.org/cdx/search/cdx"
-gdrive_hosts = ["drive.google.com", "docs.google.com", "lh3.googleusercontent.com"]
+gdrive_hosts = ["drive.google.com", "docs.google.com"]  # *.googleusercontent.com 은 자동 인식
 skip_link_hosts = ["forms.gle", "forms.google.com", "play.google.com", "apps.apple.com", "go.onelink.me"]
 
 [urls.cdn]
 community = "community-ko-cdn.lordofheroes.com"
+community_site = "community-ko.lordofheroes.com"
 game = "cdn.clovergames.io"
 
 [urls.kakao]

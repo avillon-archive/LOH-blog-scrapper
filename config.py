@@ -55,8 +55,14 @@ WAYBACK_CDX_API: str = _urls.get(
     "wayback_cdx_api", "https://web.archive.org/cdx/search/cdx",
 )
 GDRIVE_HOSTS: set[str] = set(_urls.get("gdrive_hosts", [
-    "drive.google.com", "docs.google.com", "lh3.googleusercontent.com",
+    "drive.google.com", "docs.google.com",
 ]))
+
+
+def is_gdrive_host(hostname: str) -> bool:
+    """Google Drive/이미지 호스트 판별. lhN.googleusercontent.com을 일반화 처리."""
+    h = (hostname or "").lower()
+    return h in GDRIVE_HOSTS or h.endswith(".googleusercontent.com")
 SKIP_LINK_HOSTS: set[str] = set(_urls.get("skip_link_hosts", [
     "forms.gle", "forms.google.com", "play.google.com",
     "apps.apple.com", "go.onelink.me",
@@ -64,6 +70,7 @@ SKIP_LINK_HOSTS: set[str] = set(_urls.get("skip_link_hosts", [
 
 # CDN
 COMMUNITY_CDN_HOST: str = _cdn.get("community", "community-ko-cdn.lordofheroes.com")
+COMMUNITY_SITE_HOST: str = _cdn.get("community_site", "community-ko.lordofheroes.com")
 GAME_CDN_HOST: str = _cdn.get("game", "cdn.clovergames.io")
 
 # Kakao

@@ -9,11 +9,13 @@ from bs4 import BeautifulSoup
 from .constants import (
     BLOG_HOST,
     COMMUNITY_CDN_HOST,
+    COMMUNITY_SITE_HOST,
     DL_KEYWORDS,
     DOWNLOADABLE_EXTS,
     GAME_CDN_HOST,
     GDRIVE_HOSTS,
     IMG_EXTS,
+    is_gdrive_host,
     RESOLUTION_RE,
     _NON_IMAGE_CONTEXT_KEYWORDS,
     _SKIP_LINK_HOSTS,
@@ -58,11 +60,11 @@ def collect_image_urls(soup: BeautifulSoup, post_url: str) -> list[tuple[str, st
         parsed_src = urllib.parse.urlparse(abs_src)
         hostname = (parsed_src.hostname or "").lower()
         path_ext = Path(parsed_src.path).suffix.lower()
-        if hostname in GDRIVE_HOSTS:
+        if is_gdrive_host(hostname):
             _add(abs_src, "gdrive")
         elif "/content/images/" in parsed_src.path and hostname == BLOG_HOST:
             _add(abs_src, "img")
-        elif hostname in (COMMUNITY_CDN_HOST, GAME_CDN_HOST) and path_ext in IMG_EXTS:
+        elif hostname in (COMMUNITY_CDN_HOST, COMMUNITY_SITE_HOST, GAME_CDN_HOST) and path_ext in IMG_EXTS:
             _add(abs_src, "img")
 
     for anchor in content_tag.find_all("a", href=True):
@@ -73,7 +75,7 @@ def collect_image_urls(soup: BeautifulSoup, post_url: str) -> list[tuple[str, st
             continue
         abs_href = urllib.parse.urljoin(post_url, href)
         parsed = urllib.parse.urlparse(abs_href)
-        if parsed.hostname in GDRIVE_HOSTS:
+        if is_gdrive_host(parsed.hostname):
             path_lower = parsed.path.lower()
             if "/spreadsheets/" in path_lower or "/forms/" in path_lower:
                 continue
@@ -104,7 +106,7 @@ def _detect_non_image_urls(soup: BeautifulSoup, post_url: str) -> set[str]:
             continue
         abs_href = urllib.parse.urljoin(post_url, href)
         parsed = urllib.parse.urlparse(abs_href)
-        if parsed.hostname not in GDRIVE_HOSTS:
+        if not is_gdrive_host(parsed.hostname):
             continue
         anchor_text = anchor.get_text(strip=True).lower()
         if any(kw in anchor_text for kw in _NON_IMAGE_CONTEXT_KEYWORDS):

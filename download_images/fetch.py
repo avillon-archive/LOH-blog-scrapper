@@ -15,6 +15,7 @@ from .constants import (
     COMMUNITY_CDN_HOST,
     GDRIVE_HOSTS,
     IMG_EXTS,
+    is_gdrive_host,
     WAYBACK_CDX_API,
 )
 from .models import PostSoupCache
@@ -292,7 +293,7 @@ def _fetch_wayback_gdrive_from_post(
         candidate_url = urllib.parse.urljoin(wayback_post, src)
         original_url = _original_url_from_wayback(candidate_url)
         hostname = (urllib.parse.urlparse(original_url).hostname or "").lower()
-        if hostname not in GDRIVE_HOSTS:
+        if not is_gdrive_host(hostname):
             continue
         if _normalized_link_key(original_url) != target_key:
             continue
