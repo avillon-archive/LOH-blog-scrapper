@@ -6,13 +6,20 @@
 
 ---
 
-## 설정 (`config.py` / `config.default.toml`)
+## 설정 (`config.py` / `config.default.toml` / `config.toml`)
 
-모든 설정 상수는 `config.py`에서 중앙 관리. TOML 로딩 우선순위: `config.toml` → `config.default.toml` → 하드코딩 기본값.
+모든 설정 상수는 `config.py`에서 중앙 관리.
+
+**로딩 규칙 (deep-merge):**
+1. `config.default.toml` 을 base 로 **항상** 로드 — 리포 동봉, 필수 (없으면 `FileNotFoundError`)
+2. `config.toml` 이 존재하면 `_deep_merge` 로 base 위에 병합 — 선택, gitignore 대상
+3. 중첩 dict 는 필드 단위로 합쳐진다. `[network]` 에서 `max_retries` 하나만 override 해도 나머지 필드는 기본값 유지. list/scalar 는 통째 교체.
+
+`config.toml` 에는 **이 환경에서 덮어쓸 필드만** 적는다. 기본값을 그대로 쓰는 필드는 생략. `config.default.toml` 은 직접 수정하지 않는다.
 
 `config.py`는 stdlib만 사용 (`tomllib`, `re`, `pathlib`) → 순환 import 없음. 다른 모듈은 `config`에서 직접 import하거나 `utils.py`/`log_io.py`/`download_images/constants.py`의 re-export를 통해 접근.
 
-TOML 섹션: `[paths]`, `[network]`, `[urls]`, `[categories]`, `[file_types]`. `blog_base`, `sitemap URL`, `BLOG_HOST_RE` 등은 `blog_host`에서 파생. `TAG_SLUG_TO_CATEGORY`, `KO_TO_LANG_CAT`는 `[categories.tags]`에서 자동 생성.
+TOML 섹션: `[paths]`, `[network]`, `[urls]`, `[categories]`, `[file_types]`, `[image_overrides]`, `[media_remote]`. `blog_base`, `sitemap URL`, `BLOG_HOST_RE` 등은 `blog_host`에서 파생. `TAG_SLUG_TO_CATEGORY`, `KO_TO_LANG_CAT`는 `[categories.tags]`에서 자동 생성. `[media_remote]` 는 [CONTEXT_MEDIA.md](CONTEXT_MEDIA.md) 참조.
 
 ---
 

@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""중앙 설정 — config.toml (없으면 config.default.toml) 에서 로드, 하드코딩 기본값 fallback."""
+"""중앙 설정 — config.default.toml 을 base 로 로드하고, config.toml 이 있으면 deep-merge 로 override."""
 
 import re
 import tomllib
@@ -7,15 +7,41 @@ from pathlib import Path
 
 _PROJECT_ROOT = Path(__file__).parent
 
+
+def _deep_merge(base: dict, override: dict) -> dict:
+    """재귀 dict 병합. override 가 base 의 동일 키를 덮어쓴다.
+
+    중첩 dict 는 재귀적으로 병합 ([network] 에서 한 필드만 덮어써도 나머지 유지).
+    list/scalar 는 통째로 교체.
+    """
+    for key, value in override.items():
+        if (
+            key in base
+            and isinstance(base[key], dict)
+            and isinstance(value, dict)
+        ):
+            _deep_merge(base[key], value)
+        else:
+            base[key] = value
+    return base
+
+
 # ── TOML 로드 ─────────────────────────────────────────────────────────────
-_cfg: dict = {}
-for _candidate in ("config.toml", "config.default.toml"):
-    try:
-        with open(_PROJECT_ROOT / _candidate, "rb") as _f:
-            _cfg = tomllib.load(_f)
-        break
-    except FileNotFoundError:
-        continue
+# config.default.toml 은 필수(리포 동봉). config.toml 은 선택(사용자 override).
+_default_path = _PROJECT_ROOT / "config.default.toml"
+try:
+    with open(_default_path, "rb") as _f:
+        _cfg: dict = tomllib.load(_f)
+except FileNotFoundError as _e:
+    raise FileNotFoundError(
+        f"config.default.toml 이 없다: {_default_path}. 리포에 포함되어야 한다."
+    ) from _e
+
+_override_path = _PROJECT_ROOT / "config.toml"
+if _override_path.exists():
+    with open(_override_path, "rb") as _f:
+        _override_cfg = tomllib.load(_f)
+    _deep_merge(_cfg, _override_cfg)
 
 _paths = _cfg.get("paths", {})
 _network = _cfg.get("network", {})
@@ -98,6 +124,26 @@ for _lang, _defaults in _DEFAULT_MULTILANG.items():
 
 # ── 이미지 오버라이드 ────────────────────────────────────────────────────
 IMAGE_OVERRIDES: dict[str, str] = _cfg.get("image_overrides", {})
+
+# ── 미디어 원격 리라이트 (gdrive → R2 등) ────────────────────────────────
+# 죽은 원본 URL → 외부 R2/CDN URL. --media 수집 자체를 스킵하고
+# download_html_local 이 HTML 의 해당 URL 을 R2 URL 로 치환한다.
+# base URL + 엔트리별 상대 경로 로 최종 URL 을 구성한다.
+_media_remote = _cfg.get("media_remote", {})
+_rewrite_base_raw: str = (_media_remote.get("base") or "").strip()
+MEDIA_REMOTE_REWRITE_BASE: str = (
+    _rewrite_base_raw.rstrip("/") + "/" if _rewrite_base_raw else ""
+)
+_rewrite_entries: dict[str, str] = _media_remote.get("rewrites", {}) or {}
+if _rewrite_entries and not MEDIA_REMOTE_REWRITE_BASE:
+    raise ValueError(
+        "[media_remote.rewrites] 엔트리가 있지만 [media_remote].base 가 비어 있다. "
+        "config.toml 에 media_remote.base 를 지정하라."
+    )
+MEDIA_REMOTE_REWRITES: dict[str, str] = {
+    k: MEDIA_REMOTE_REWRITE_BASE + v.lstrip("/")
+    for k, v in _rewrite_entries.items()
+}
 
 # MULTILANG_CONFIGS — build_posts_list.py 에서 사용하는 구조 그대로 생성
 MULTILANG_CONFIGS: dict[str, dict] = {}

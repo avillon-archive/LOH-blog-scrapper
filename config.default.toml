@@ -1,6 +1,7 @@
 # ── Lord of Heroes Blog Scrapper — 기본 설정 ─────────────────────────────
-# config.toml 로 복사한 뒤 원하는 값만 수정하세요.
-# config.toml 이 없으면 이 파일의 값이 사용됩니다.
+# 이 파일은 항상 base 로 로드됩니다. 사용자 override 는 config.toml 에 넣고,
+# deep-merge 로 이 파일의 해당 필드만 덮어씁니다. config.toml 은 선택 사항이며,
+# 없으면 이 파일의 값이 그대로 사용됩니다. 이 파일을 직접 수정하지 마세요.
 
 # ── 경로 ──────────────────────────────────────────────────────────────────
 [paths]
@@ -94,6 +95,20 @@ avillontoon = "Gallery"
 [image_overrides]
 # 영구 깨진 URL = "동일 이미지의 블로그 URL"
 # "https://lh3.googleusercontent.com/broken..." = "https://blog-ko.lordofheroes.com/content/images/..."
+
+# ── 미디어 원격 리라이트 (gdrive → R2 등) ─────────────────────────────────
+# [image_overrides] 와 의미가 다름:
+#   image_overrides         = 살아 있는 원본에서 다시 받아서 로컬화
+#   media_remote.rewrites   = 수집 자체 스킵 + HTML 에서 외부 URL 로 치환
+# 로컬 다운로드 없이 R2/CDN 이 직접 서빙하는 케이스용 (YouTube 를 로컬라이즈
+# 하지 않는 것과 동일 철학이지만 URL 을 원격 대상으로 리라이트).
+# 기본값은 비활성. 사용하려면 config.toml 에 base + entries 를 넣는다.
+[media_remote]
+base = ""  # 예: "https://cdn.example.com/loh/"
+
+[media_remote.rewrites]
+# 죽은 원본 URL = base 기준 상대 경로 (디렉토리/파일명)
+# "https://drive.google.com/file/d/XXXX/view" = "audio/bgm/track1.mp3"
 
 # ── 파일 타입 ─────────────────────────────────────────────────────────────
 [file_types]

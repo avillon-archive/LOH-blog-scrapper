@@ -16,7 +16,12 @@ from pathlib import Path
 from bs4 import BeautifulSoup
 
 from asset_downloader import CssDownloader, SiteImageDownloader
-from config import BLOG_BASE as _BLOG_BASE, BLOG_HOST_RE, TAG_SLUG_TO_CATEGORY
+from config import (
+    BLOG_BASE as _BLOG_BASE,
+    BLOG_HOST_RE,
+    MEDIA_REMOTE_REWRITES,
+    TAG_SLUG_TO_CATEGORY,
+)
 from download_media.constants import (
     ANCHOR_APPEND,
     ANCHOR_INLINE,
@@ -247,6 +252,12 @@ class HtmlLocalizer:
 
     # -- 앵커 링크 로컬화 --
 
+    def _apply_media_prefix(self, rel_or_url: str) -> str:
+        """media_url_to_path 값에 prefix 적용. 절대 URL(R2 등 원격 리라이트)은 그대로 반환."""
+        if rel_or_url.startswith(("http://", "https://")):
+            return rel_or_url
+        return f"{self._prefix}{rel_or_url}"
+
     def _rewrite_anchor_assets(self) -> None:
         """<a href>가 image_map 또는 media_map에 있는 파일을 가리키면 로컬 경로로 치환."""
         for a in self._soup.find_all("a", href=True):
@@ -255,9 +266,13 @@ class HtmlLocalizer:
                 continue
             abs_href = urllib.parse.urljoin(self._post_url, href)
             key = clean_url(abs_href)
-            relative_path = self._image_map.get(key) or self._media_url_to_path.get(key)
-            if relative_path:
-                a["href"] = f"{self._prefix}{relative_path}"
+            img_rel = self._image_map.get(key)
+            if img_rel:
+                a["href"] = f"{self._prefix}{img_rel}"
+                continue
+            media_rel = self._media_url_to_path.get(key)
+            if media_rel:
+                a["href"] = self._apply_media_prefix(media_rel)
 
     # -- 비디오/오디오 태그 로컬화 --
 
@@ -287,7 +302,7 @@ class HtmlLocalizer:
                 if src:
                     rel = self._lookup_media(src)
                     if rel:
-                        tag["src"] = f"{self._prefix}{rel}"
+                        tag["src"] = self._apply_media_prefix(rel)
                 if tag_name == "video":
                     poster = tag.get("poster") or ""
                     if poster:
@@ -300,7 +315,7 @@ class HtmlLocalizer:
                         else:
                             rel = self._lookup_media(poster)
                             if rel:
-                                tag["poster"] = f"{self._prefix}{rel}"
+                                tag["poster"] = self._apply_media_prefix(rel)
                             else:
                                 # 매핑 실패 → poster 속성 제거
                                 del tag["poster"]
@@ -309,7 +324,7 @@ class HtmlLocalizer:
                     if ssrc:
                         rel = self._lookup_media(ssrc)
                         if rel:
-                            source["src"] = f"{self._prefix}{rel}"
+                            source["src"] = self._apply_media_prefix(rel)
 
     # -- Cat C 위치 기반/말미 주입 --
 
@@ -614,6 +629,12 @@ def run_html_local(
         f"[HTML-LOCAL] media_map 로드: {len(media_url_to_path)}개 URL, "
         f"{len(post_media_index)}개 포스트"
     )
+    # 원격 리라이트 (gdrive → R2 등) 병합: R2 엔트리가 로컬 매핑보다 우선
+    if MEDIA_REMOTE_REWRITES:
+        media_url_to_path.update(MEDIA_REMOTE_REWRITES)
+        print(
+            f"[HTML-LOCAL] media_remote.rewrites 병합: {len(MEDIA_REMOTE_REWRITES)}개"
+        )
 
     # 소스: done_html.txt 기반 (html_path, post_url) 목록
     html_index = build_html_index(html_dir, done_html_file)  # {url: Path}

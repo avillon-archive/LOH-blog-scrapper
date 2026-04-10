@@ -15,6 +15,7 @@ from pathlib import Path
 
 from bs4 import BeautifulSoup
 
+from config import MEDIA_REMOTE_REWRITES
 from download_images.collect import _detect_non_image_urls
 from download_images.fetch import _get_content_tag
 from download_images.url_utils import _clean_img_url
@@ -49,6 +50,9 @@ def collect_media_urls(
         if not url or not url.startswith("http"):
             return
         if _is_embed_host(url):
+            return
+        # 원격 리라이트 대상은 수집 스킵 (R2 등에서 직접 서빙)
+        if _clean_img_url(url) in MEDIA_REMOTE_REWRITES:
             return
         key = (mtype, _clean_img_url(url))
         if key in seen_keys:

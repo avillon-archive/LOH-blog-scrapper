@@ -86,6 +86,52 @@ Wayback 포럼 HTML 의 각 media tag 직전에서 **의미 있는 텍스트 블
 
 두 번째 규칙 때문에 `--media` 실행 후 `--html-local` 을 다시 돌리면 자동으로 반영된다.
 
+## `[media_remote]` — 원격 리라이트 (gdrive → R2)
+
+영구 깨진 media URL 을 **로컬로 받지 않고** 외부 서빙 URL(R2/CDN 등) 로 치환하는 경로. YouTube/Vimeo 제외 패턴의 변형이다 — 제외 + URL 리라이트.
+
+### `[image_overrides]` 와의 차이
+
+| | `[image_overrides]` | `[media_remote.rewrites]` |
+|---|---|---|
+| 의미 | 살아 있는 원본에서 **재다운로드** → 로컬화 | 수집/다운로드 **스킵** → HTML 에서 외부 URL 로 치환 |
+| 대상 | 이미지 | 비이미지 미디어 (오디오/비디오) |
+| 결과 파일 | `image_map.csv` 에 로컬 경로 기록 | 아무 파일에도 기록 없음. HTML `src`/`href` 만 외부 URL 로 교체 |
+| 소비 지점 | `download_images/download.py` | `download_media/collect.py` + `download_html_local.py` |
+| 철학 | "죽은 링크 → 같은 이미지의 생존 사본" | "YouTube 처럼 외부 서빙, 단 URL 은 새 호스트로" |
+
+이미지 override 의미를 미디어에 확장하지 **않는다**. 원본이 살아 있어서 다시 받으면 되는 경우엔 `[image_overrides]` 의 미디어 판이 필요하겠지만, 현재 구현 범위 밖.
+
+### 설정 구조
+
+```toml
+[media_remote]
+base = "https://cdn.example.com/loh/"
+
+[media_remote.rewrites]
+# 죽은 원본 URL = base 기준 상대 경로 (디렉토리/파일명)
+"https://docs.google.com/uc?export=download&id=1lkPg..." = "audio/bgm/track1.mp3"
+"https://drive.google.com/u/0/uc?id=16SvL...&export=download" = "audio/bgm/track2.mp3"
+```
+
+- `base` 는 파일 서빙 루트. `config.py` 로딩 시점에 `base + 상대경로` 로 합쳐져 `MEDIA_REMOTE_REWRITES` 최종 dict 가 만들어진다.
+- `base` 가 비어 있는데 `rewrites` 엔트리가 있으면 `ValueError` 로 즉시 실패 (silent drop 금지).
+- 키는 `clean_url()` 기준 그대로. gdrive URL 의 쿼리 파라미터는 `clean_url` 이 **보존** 하므로, `failed_media.csv` 에서 URL 을 그대로 복사해 넣으면 된다.
+- 기본값은 비활성 (`base = ""`, `rewrites = {}`). 사용하려면 `config.toml` 에 이 두 키를 override.
+
+### 동작
+
+1. **수집 스킵** — `download_media/collect.py::_add()` 가 `_is_embed_host` 체크 직후 `MEDIA_REMOTE_REWRITES` 를 조회. 매치되면 수집 리스트에 넣지 않는다. YouTube/Vimeo 제외와 동일 위치.
+   - 결과: `download_one_media` 호출 없음 → `media_map.csv`/`failed_media.csv` 에 신규 엔트리 없음.
+2. **HTML 리라이트** — `download_html_local.py` 가 media_map 로드 직후 `media_url_to_path.update(MEDIA_REMOTE_REWRITES)` 로 병합. R2 엔트리가 로컬 매핑보다 우선.
+3. **prefix 분기** — `HtmlLocalizer._apply_media_prefix(value)` 헬퍼가 값이 `http://`/`https://` 로 시작하면 그대로 반환, 아니면 `self._prefix` 부착. `<a href>`, `<audio src>`, `<video src>`, `<video poster>`, `<source src>` 전 경로가 이 헬퍼를 거친다.
+
+Cat A (gdrive 오디오) 가 주 대상이지만, 구현은 category-중립이다. Cat B/D 의 어떤 URL이라도 config 에 등록하면 동일하게 스킵/리라이트된다.
+
+### 기존 실패 잔재 정리
+
+이 기능을 켜기 전에 쌓인 `failed_media.csv` 의 해당 URL 엔트리는 **자동으로 제거되지 않는다**. 재처리에 영향은 없지만 잔재가 신경 쓰이면 수동으로 해당 줄을 삭제한다 (`--retry --media` 가 해당 URL 을 다시 시도하지 않고 collect 단계에서 스킵되므로 `remove_from_failed_media` 호출 경로가 없음).
+
 ## 제약 / v1 한계
 
 - Cat C `<video poster=>` 는 무시 (v1 에서는 poster 없이 `<video>` 만 주입)
