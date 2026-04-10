@@ -2,7 +2,7 @@
 
 `blog-ko.lordofheroes.com` 전체 포스트(~2,200개)의 이미지·MD·HTML을 로컬에 저장하는 Python 스크래퍼.
 
-> 모듈별 상세: [CONTEXT_UTILS.md](CONTEXT_UTILS.md) · [CONTEXT_LOG.md](CONTEXT_LOG.md) · [CONTEXT_IMAGES.md](CONTEXT_IMAGES.md) · [CONTEXT_RUN.md](CONTEXT_RUN.md) · [CONTEXT_HTML_LOCAL.md](CONTEXT_HTML_LOCAL.md)
+> 모듈별 상세: [CONTEXT_UTILS.md](CONTEXT_UTILS.md) · [CONTEXT_LOG.md](CONTEXT_LOG.md) · [CONTEXT_IMAGES.md](CONTEXT_IMAGES.md) · [CONTEXT_MEDIA.md](CONTEXT_MEDIA.md) · [CONTEXT_RUN.md](CONTEXT_RUN.md) · [CONTEXT_HTML_LOCAL.md](CONTEXT_HTML_LOCAL.md)
 
 ---
 
@@ -18,9 +18,9 @@ TOML 섹션: `[paths]`, `[network]`, `[urls]`, `[categories]`, `[file_types]`. `
 
 ## 파이프라인
 
-의존 관계: **html → images → {md, html-local}**. md와 html-local은 상호 의존 없음 (둘 다 `image_map.csv`를 참조).
+의존 관계: **html → images → {media, md, html-local}**. md·html-local·media 는 상호 의존 없음 (셋 다 `image_map.csv` / `media_map.csv` 를 참조).
 
-실행 순서: `("html", "images", "md", "html-local")` 고정. html은 `--images`나 `--md`만 지정해도 항상 포함 (로컬 캐시 구축). html-local은 명시적 지정 또는 전체 실행 시에만 포함.
+기본 실행 순서: `PIPELINE_ORDER = ("html", "images", "md", "html-local")` — media 는 포함되지 않는다. `--media` 명시 시에만 `PIPELINE_FULL_ORDER = ("html", "images", "media", "md", "html-local")` 에 따라 실행. html은 `--images`/`--md`/`--media` 만 지정해도 항상 포함 (로컬 캐시 구축). html-local은 명시적 지정 또는 전체 실행 시에만 포함. media 는 opt-in.
 
 ---
 
@@ -32,6 +32,7 @@ TOML 섹션: `[paths]`, `[network]`, `[urls]`, `[categories]`, `[file_types]`. `
   images/{카테고리}/YYYY/MM/  ← 본문 이미지
   images/etc/YYYY/MM/        ← 카테고리 없는 이미지
   images_fallback/            ← --retry-fallback 보존용 폴백 이미지
+  media/{카테고리}/YYYY/MM/   ← mp4/오디오 등 비이미지 미디어 (--media 산출물)
   md/[카테고리/]              ← Markdown
   html/[카테고리/]            ← KO 원문 HTML
   html_en/, html_ja/         ← EN/JA 원문 HTML (flat, 카테고리 없음)

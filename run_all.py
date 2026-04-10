@@ -6,6 +6,7 @@ Usage:
   python run_all.py --images
   python run_all.py --md
   python run_all.py --html
+  python run_all.py --media
   python run_all.py --retry
   python run_all.py --sample 10
   python run_all.py --sample 10 --seed 123
@@ -16,6 +17,7 @@ Usage:
   python run_all.py --pages --md
   python run_all.py --custom
   python run_all.py --custom --images
+  python run_all.py --custom --media
   python run_all.py --html-local
   python run_all.py --clean-fallback
 """
@@ -53,6 +55,7 @@ from build_posts_list import (
     fill_published_times,
 )
 from download_images import run_images, run_fallback_images
+from download_media import run_media
 from download_md import run_md
 from download_html import run_html
 from download_html_local import run_html_local
@@ -61,10 +64,14 @@ PAGES_FILE = ROOT_DIR / "all_pages.csv"
 LINKS_FILE = ROOT_DIR / "all_links.csv"
 CUSTOM_POSTS_FILE = ROOT_DIR / "custom_posts.txt"
 FAILED_IMAGES_FILE = ROOT_DIR / "failed_images.csv"
+FAILED_MEDIA_FILE = ROOT_DIR / "failed_media.csv"
 FAILED_MD_FILE = ROOT_DIR / "failed_md.csv"
 FAILED_HTML_FILE = ROOT_DIR / "failed_html.csv"
 FAILED_HTML_LOCAL_FILE = ROOT_DIR / "failed_html_local.csv"
+# 기본 파이프라인 (플래그 없이 실행 시) — media 는 opt-in 이므로 제외
 PIPELINE_ORDER = ("html", "images", "md", "html-local")
+# 실행 시 canonical 순서 (media 포함)
+PIPELINE_FULL_ORDER = ("html", "images", "media", "md", "html-local")
 HTML_DIR = ROOT_DIR / "html"
 DONE_HTML_FILE = ROOT_DIR / "done_html.csv"
 
@@ -168,6 +175,8 @@ def _load_failed_posts_for_retry(selected: set[str]) -> set[str]:
     targets: set[str] = set()
     if "images" in selected:
         targets |= load_failed_post_urls(FAILED_IMAGES_FILE)
+    if "media" in selected:
+        targets |= load_failed_post_urls(FAILED_MEDIA_FILE)
     if "md" in selected:
         targets |= load_failed_post_urls(FAILED_MD_FILE)
     if "html" in selected:
@@ -189,6 +198,8 @@ def _sample_posts(
 def _sample_source_label(selected: set[str]) -> str:
     if selected == {"images"}:
         return "failed_images.csv"
+    if selected == {"media"}:
+        return "failed_media.csv"
     if selected == {"md"}:
         return "failed_md.csv"
     if selected == {"html"}:
@@ -199,6 +210,8 @@ def _sample_source_label(selected: set[str]) -> str:
     labels: list[str] = []
     if "images" in selected:
         labels.append("failed_images.csv")
+    if "media" in selected:
+        labels.append("failed_media.csv")
     if "md" in selected:
         labels.append("failed_md.csv")
     if "html" in selected:
@@ -246,6 +259,8 @@ def main():
         epilog=__doc__,
     )
     parser.add_argument("--images", action="store_true", help="이미지만 처리")
+    parser.add_argument("--media", action="store_true",
+                        help="mp4/오디오 등 비이미지 미디어만 처리 (opt-in)")
     parser.add_argument("--md", action="store_true", help="MD만 처리")
     parser.add_argument("--html", action="store_true", help="HTML만 처리")
     parser.add_argument("--html-local", action="store_true", help="오프라인 열람용 HTML 생성")
@@ -326,12 +341,17 @@ def main():
 
     # ── 파이프라인 단계 결정 ────────────────────────────────────────────
     # --retry / --reprocess-fallbacks 는 이미지 전용이므로 images 단계만 선택
-    images_only_flags = args.retry or args.retry_fallback
+    # 단, --retry --media 는 media 만 선택
+    media_only_retry = args.retry and args.media and not (
+        args.images or args.md or args.html or getattr(args, "html_local", False)
+    )
+    images_only_flags = (args.retry or args.retry_fallback) and not media_only_retry
     html_local_flag = getattr(args, "html_local", False)
     user_selected = {
         name
         for name, enabled in (
             ("images", args.images or images_only_flags),
+            ("media", args.media),
             ("md", args.md),
             ("html", args.html),
             ("html-local", html_local_flag),
@@ -339,7 +359,7 @@ def main():
         if enabled
     }
     if not user_selected:
-        user_selected = set(PIPELINE_ORDER)
+        user_selected = set(PIPELINE_ORDER)  # media 는 opt-in 이므로 기본에서 제외
     selected = user_selected | {"html"}  # html 은 항상 실행 (md/images 가 저장된 HTML 을 재활용)
 
     # ── 포스트 소스 파일 결정 ───────────────────────────────────────────
@@ -407,7 +427,7 @@ def main():
             f"source={sample_pool_label}, seed={args.seed}"
         )
 
-    selected_order = [name for name in PIPELINE_ORDER if name in selected]
+    selected_order = [name for name in PIPELINE_FULL_ORDER if name in selected]
     print(
         f"[시작] 총 {len(posts)}개 포스트 | "
         f"소스={source_label} | "
@@ -494,6 +514,12 @@ def main():
                 run_images(posts, retry_mode=args.retry,
                            force_download=force_download,
                            html_index=html_index, max_workers=max_workers)
+        elif step == "media":
+            print("▶ 미디어(비이미지) 다운로드 시작")
+            print("━" * 60)
+            run_media(posts, retry_mode=args.retry,
+                      force_download=force_download,
+                      html_index=html_index, max_workers=max_workers)
         elif step == "md":
             print("▶ MD 파일 저장 시작")
             print("━" * 60)

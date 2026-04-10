@@ -17,6 +17,13 @@ from bs4 import BeautifulSoup
 
 from asset_downloader import CssDownloader, SiteImageDownloader
 from config import BLOG_BASE as _BLOG_BASE, BLOG_HOST_RE, TAG_SLUG_TO_CATEGORY
+from download_media.constants import (
+    ANCHOR_APPEND,
+    ANCHOR_INLINE,
+    ANCHOR_POSITIONED,
+    MEDIA_MAP_FILE,
+)
+from download_media.persistence import load_media_map_entries
 from log_io import append_line, csv_line
 from utils import (
     DEFAULT_MAX_WORKERS,
@@ -116,6 +123,8 @@ class HtmlLocalizer:
         category: str | None,
         css_downloader: CssDownloader,
         site_image_downloader: SiteImageDownloader | None = None,
+        media_url_to_path: dict[str, str] | None = None,
+        post_media_entries: list[tuple[str, str, str, str]] | None = None,
     ) -> None:
         self._soup = soup
         self._post_url = post_url
@@ -126,6 +135,9 @@ class HtmlLocalizer:
         self._site_img = site_image_downloader
         self._prefix = _img_prefix(category)
         self._assets_prefix = _assets_prefix(category)
+        self._media_url_to_path = media_url_to_path or {}
+        # post_media_entries: [(media_url, rel_path, anchor_type, anchor_text), ...]
+        self._post_media_entries = post_media_entries or []
         self.unmapped_urls: set[str] = set()
 
     def localize(self) -> str:
@@ -134,7 +146,9 @@ class HtmlLocalizer:
         self._rewrite_images()
         self._rewrite_meta_images()
         self._rewrite_style_bg_images()
+        self._rewrite_video_audio_tags()
         self._rewrite_anchor_assets()
+        self._inject_recovered_media()
         self._rewrite_internal_links()
         self._rewrite_home_logo()
         self._fix_youtube_iframes()
@@ -234,16 +248,173 @@ class HtmlLocalizer:
     # -- 앵커 링크 로컬화 --
 
     def _rewrite_anchor_assets(self) -> None:
-        """<a href>가 image_map에 있는 파일을 가리키면 로컬 경로로 치환."""
+        """<a href>가 image_map 또는 media_map에 있는 파일을 가리키면 로컬 경로로 치환."""
         for a in self._soup.find_all("a", href=True):
             href = a["href"]
             if not href or not href.startswith("http"):
                 continue
             abs_href = urllib.parse.urljoin(self._post_url, href)
             key = clean_url(abs_href)
-            relative_path = self._image_map.get(key)
+            relative_path = self._image_map.get(key) or self._media_url_to_path.get(key)
             if relative_path:
                 a["href"] = f"{self._prefix}{relative_path}"
+
+    # -- 비디오/오디오 태그 로컬화 --
+
+    def _lookup_media(self, url: str) -> str | None:
+        """URL → media_map 기반 로컬 rel_path 조회. 없으면 None + stale 추적."""
+        if not url or url.startswith("data:"):
+            return None
+        abs_src = urllib.parse.urljoin(self._post_url, url)
+        if not abs_src.startswith("http"):
+            return None
+        key = clean_url(abs_src)
+        rel = self._media_url_to_path.get(key)
+        if rel:
+            return rel
+        self.unmapped_urls.add(key)
+        return None
+
+    def _rewrite_video_audio_tags(self) -> None:
+        """현재 HTML 의 <video>/<audio>/<source> src/poster 를 로컬 경로로 치환.
+
+        Cat B (미디어가 현재 HTML 에 그대로 있는 경우) 용.
+        매핑 실패한 poster 는 제거 (깨진 이미지 플레이스홀더 방지).
+        """
+        for tag_name in ("video", "audio"):
+            for tag in self._soup.find_all(tag_name):
+                src = tag.get("src") or ""
+                if src:
+                    rel = self._lookup_media(src)
+                    if rel:
+                        tag["src"] = f"{self._prefix}{rel}"
+                if tag_name == "video":
+                    poster = tag.get("poster") or ""
+                    if poster:
+                        # image_map 먼저 시도 (poster 이미지가 --images 에서 회수되었을 수 있음)
+                        abs_poster = urllib.parse.urljoin(self._post_url, poster)
+                        key = clean_url(abs_poster)
+                        img_rel = self._image_map.get(key)
+                        if img_rel:
+                            tag["poster"] = f"{self._prefix}{img_rel}"
+                        else:
+                            rel = self._lookup_media(poster)
+                            if rel:
+                                tag["poster"] = f"{self._prefix}{rel}"
+                            else:
+                                # 매핑 실패 → poster 속성 제거
+                                del tag["poster"]
+                for source in tag.find_all("source"):
+                    ssrc = source.get("src") or ""
+                    if ssrc:
+                        rel = self._lookup_media(ssrc)
+                        if rel:
+                            source["src"] = f"{self._prefix}{rel}"
+
+    # -- Cat C 위치 기반/말미 주입 --
+
+    def _build_media_tag(self, rel_path: str, mtype: str):
+        """로컬 경로를 가리키는 <video>/<audio>/<a> 태그를 생성한다."""
+        local_src = f"{self._prefix}{rel_path}"
+        if mtype == "audio_tag":
+            tag = self._soup.new_tag("audio")
+            tag["controls"] = "controls"
+            tag["src"] = local_src
+            tag["style"] = "width:100%;"
+        elif mtype in ("video_tag", "anchor_direct"):
+            tag = self._soup.new_tag("video")
+            tag["controls"] = "controls"
+            tag["src"] = local_src
+            tag["style"] = "max-width:100%; height:auto;"
+        else:
+            tag = self._soup.new_tag("a", href=local_src)
+            tag.string = Path(rel_path).name
+        return tag
+
+    def _wrap_recovered_figure(self, media_tag):
+        """미디어 태그를 <figure class="recovered-media"> 로 감싼다."""
+        fig = self._soup.new_tag("figure")
+        fig["class"] = ["recovered-media"]
+        fig["style"] = "margin:1em 0;"
+        fig.append(media_tag)
+        return fig
+
+    def _find_positioned_anchor(self, anchor_text: str):
+        """post-content 내부에서 anchor_text 를 포함하는 블록 요소를 찾는다."""
+        post_content = self._soup.select_one(".post-content") or self._soup.select_one("article")
+        if post_content is None:
+            return None
+        needle = anchor_text.strip()
+        if not needle:
+            return None
+
+        best = None
+        for el in post_content.find_all(["p", "h1", "h2", "h3", "h4", "h5", "h6", "blockquote"]):
+            text = " ".join((el.get_text(" ", strip=True) or "").split())
+            if needle in text:
+                best = el
+                # 가장 얕은(= 먼저 등장하는) 매치를 사용
+                break
+        return best
+
+    def _inject_recovered_media(self) -> None:
+        """media_map 의 positioned/append 엔트리를 현재 HTML 에 주입한다.
+
+        Cat C: 포럼 시대에 있었으나 마이그레이션으로 제거된 미디어.
+        """
+        if not self._post_media_entries:
+            return
+
+        post_content = self._soup.select_one(".post-content") or self._soup.select_one("article")
+        if post_content is None:
+            return
+
+        positioned_entries: list[tuple[str, str, str]] = []  # (rel_path, mtype, anchor_text)
+        append_entries: list[tuple[str, str]] = []  # (rel_path, mtype)
+
+        for media_url, rel_path, anchor_type, anchor_text in self._post_media_entries:
+            if anchor_type not in (ANCHOR_POSITIONED, ANCHOR_APPEND):
+                continue
+            # mtype 는 rel_path 확장자로 추정
+            ext = Path(rel_path).suffix.lower()
+            from config import AUDIO_EXTS as _AUDIO_EXTS, VIDEO_EXTS as _VIDEO_EXTS
+            if ext in _AUDIO_EXTS:
+                mtype = "audio_tag"
+            elif ext in _VIDEO_EXTS:
+                mtype = "video_tag"
+            else:
+                mtype = "anchor_direct"
+            if anchor_type == ANCHOR_POSITIONED and anchor_text:
+                positioned_entries.append((rel_path, mtype, anchor_text))
+            else:
+                append_entries.append((rel_path, mtype))
+
+        # positioned 엔트리: 각자 앵커 위치 뒤에 figure 삽입
+        for rel_path, mtype, anchor_text in positioned_entries:
+            anchor_el = self._find_positioned_anchor(anchor_text)
+            media_tag = self._build_media_tag(rel_path, mtype)
+            figure = self._wrap_recovered_figure(media_tag)
+            if anchor_el is not None:
+                anchor_el.insert_after(figure)
+            else:
+                # 매칭 실패 → append 로 강등
+                append_entries.append((rel_path, mtype))
+
+        # append 엔트리: post-content 말미에 단일 섹션으로 묶어서 추가
+        if append_entries:
+            section = self._soup.new_tag("section")
+            section["class"] = ["recovered-media-append"]
+            section["style"] = "margin-top:2em; padding-top:1em; border-top:1px solid #ddd;"
+            heading = self._soup.new_tag("p")
+            heading_em = self._soup.new_tag("em")
+            heading_em.string = "[복구된 미디어]"
+            heading.append(heading_em)
+            section.append(heading)
+            for rel_path, mtype in append_entries:
+                media_tag = self._build_media_tag(rel_path, mtype)
+                figure = self._wrap_recovered_figure(media_tag)
+                section.append(figure)
+            post_content.append(section)
 
     def _rewrite_internal_links(self) -> None:
         """블로그 내부 <a href> 를 로컬 html_local 파일 상대경로로 리라이트."""
@@ -366,6 +537,8 @@ def _process_post(
     failed_log: FailedLog,
     site_image_downloader: SiteImageDownloader | None = None,
     stale_buf: LineBuffer | None = None,
+    media_url_to_path: dict[str, str] | None = None,
+    post_media_entries: list[tuple[str, str, str, str]] | None = None,
 ) -> bool:
     try:
         html_text = html_path.read_text(encoding="utf-8")
@@ -381,6 +554,8 @@ def _process_post(
     localizer = HtmlLocalizer(
         soup, post_url, image_map, slug_map, category, css_downloader,
         site_image_downloader,
+        media_url_to_path=media_url_to_path,
+        post_media_entries=post_media_entries,
     )
     output = localizer.localize()
 
@@ -425,6 +600,21 @@ def run_html_local(
     image_map = load_image_map(IMAGE_MAP_FILE)
     print(f"[HTML-LOCAL] image_map 로드: {len(image_map)}개 항목")
 
+    # ── media_map 로드 ──────────────────────────────────────────────────
+    media_entries_all = load_media_map_entries(MEDIA_MAP_FILE)
+    media_url_to_path: dict[str, str] = {}
+    post_media_index: dict[str, list[tuple[str, str, str, str]]] = {}
+    for post_url_e, media_url_e, rel_path_e, atype_e, atext_e in media_entries_all:
+        if media_url_e not in media_url_to_path:
+            media_url_to_path[media_url_e] = rel_path_e
+        post_media_index.setdefault(post_url_e, []).append(
+            (media_url_e, rel_path_e, atype_e, atext_e)
+        )
+    print(
+        f"[HTML-LOCAL] media_map 로드: {len(media_url_to_path)}개 URL, "
+        f"{len(post_media_index)}개 포스트"
+    )
+
     # 소스: done_html.txt 기반 (html_path, post_url) 목록
     html_index = build_html_index(html_dir, done_html_file)  # {url: Path}
     source = [(path, url) for url, path in html_index.items()]
@@ -442,10 +632,16 @@ def run_html_local(
     stale = load_stale(STALE_FILE)
     refresh_urls: set[str] = set()
     if not force_download:
-        image_map_keys = image_map.keys()
+        # image_map / media_map 양쪽 키를 모두 고려 — 어느 한쪽에 신규 매핑이
+        # 추가되어 unmapped 가 해소되면 해당 포스트를 재생성한다.
+        combined_keys = set(image_map.keys()) | set(media_url_to_path.keys())
         for url, unmapped in stale.items():
-            if unmapped & image_map_keys:
+            if unmapped & combined_keys:
                 refresh_urls.add(url)
+    # media_map 에 엔트리가 있는 포스트도 모두 refresh (media 를 이번 run 에서 주입해야 함)
+    if not force_download:
+        for post_url_e in post_media_index.keys():
+            refresh_urls.add(post_url_e)
     if stale:
         if refresh_urls:
             done_urls -= refresh_urls
@@ -491,6 +687,8 @@ def run_html_local(
             css_downloader, html_local_dir, failed_log,
             site_img_downloader,
             stale_buf=stale_buf,
+            media_url_to_path=media_url_to_path,
+            post_media_entries=post_media_index.get(url),
         )
         if success:
             slug = html_path.stem

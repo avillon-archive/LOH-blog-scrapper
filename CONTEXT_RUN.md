@@ -4,12 +4,13 @@
 
 | 플래그 | 설명 |
 |--------|------|
-| (없음) | 전체 파이프라인 실행 (html → images → {md, html-local}) |
+| (없음) | 전체 파이프라인 실행 (html → images → md → html-local). media 는 포함되지 않음 (opt-in) |
 | `--images` | 이미지만 처리 |
+| `--media` | mp4/오디오 등 비이미지 미디어만 처리 (**opt-in**, 기본 파이프라인에서 제외) |
 | `--md` | MD만 처리 |
 | `--html` | HTML만 처리 |
 | `--html-local` | 오프라인 열람용 HTML 생성 |
-| `--retry` | 실패 목록 재처리 (원본/Wayback만) |
+| `--retry` | 실패 목록 재처리 (원본/Wayback만). `--media` 와 조합 시 `failed_media.csv` 기준 |
 | `--retry-fallback` | 실패 이미지 multilang/kakao 폴백 (별도 디렉토리에 보존) |
 | `--posts` | all_posts.csv를 소스로 사용 (사이트맵 갱신 건너뜀) |
 | `--pages` | all_pages.csv를 소스로 사용 (사이트맵 갱신 건너뜀) |
@@ -22,7 +23,16 @@
 
 ## HTML 항상 실행
 
-`selected = user_selected | {"html"}` — `--images`나 `--md`만 지정해도 HTML 포함. 단, 사용자가 `--html`을 명시하지 않으면 HTML 단계에 `retry_mode`/`force_download`를 전달하지 않음 (보조 단계).
+`selected = user_selected | {"html"}` — `--images`/`--md`/`--media` 만 지정해도 HTML 포함. 단, 사용자가 `--html`을 명시하지 않으면 HTML 단계에 `retry_mode`/`force_download`를 전달하지 않음 (보조 단계).
+
+## PIPELINE_ORDER vs PIPELINE_FULL_ORDER
+
+- **`PIPELINE_ORDER = ("html", "images", "md", "html-local")`** — 플래그 없이 실행 시 기본 셋 (`user_selected = set(PIPELINE_ORDER)`). media 는 여기 없음.
+- **`PIPELINE_FULL_ORDER = ("html", "images", "media", "md", "html-local")`** — 실행 시 단계 정렬 순서. selected 에 media 가 포함된 경우에만 실행되며, images 뒤 md 앞에 위치.
+
+`--media` 는 **opt-in**: `PIPELINE_ORDER` 에 없으므로 인수 없이 `python run_all.py` 를 실행해도 media 는 동작하지 않는다. Wayback CDX 조회 비용을 통제하기 위함.
+
+`--retry --media` 조합은 media 단독 재처리로 해석 (images 가 끼어들지 않도록 `media_only_retry` 플래그로 예외 처리).
 
 ## CLI 옵션 제약
 
@@ -70,6 +80,10 @@ posts > 100건: workers = default_max_workers (기본 8), rate_limit = blog_rate
 ### images 단계
 
 `--retry-fallback`이면 `run_fallback_images()`, 아니면 `run_images()`.
+
+### media 단계 (opt-in)
+
+`run_media(posts, retry_mode, force_download, html_index, max_workers)`. `--images` 와 동일한 `html_index` 를 공유 (HTML 캐시 재활용). Cat A/B/D 는 현재 blog HTML 에서 수집, Cat C 는 `og:title` + `published_time` 으로 Wayback 포럼 URL 해소 후 수집. 상세: [CONTEXT_MEDIA.md](CONTEXT_MEDIA.md).
 
 ### md 단계
 

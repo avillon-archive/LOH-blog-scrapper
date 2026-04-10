@@ -27,10 +27,12 @@ cp config.default.toml config.toml
 ## 빠른 시작
 
 ```bash
-python run_all.py                    # 전체 파이프라인 (html → images → {md, html-local})
+python run_all.py                    # 전체 파이프라인 (html → images → {md, html-local}, media 제외)
 python run_all.py --images           # 이미지만 수집
+python run_all.py --media            # 비이미지 미디어(mp4/오디오 등)만 수집 (opt-in)
 python run_all.py --html-local       # 오프라인 HTML만 재생성
 python run_all.py --retry            # 실패 목록 재처리 (원본/Wayback)
+python run_all.py --retry --media    # failed_media.csv 재처리
 python run_all.py --retry-fallback   # 실패 이미지 multilang/kakao 폴백
 python run_all.py --force            # 전체 재다운로드
 ```
@@ -58,4 +60,12 @@ python run_all.py --force            # 전체 재다운로드
 ## HTML-LOCAL
 
 - 블로그 폐쇄를 대비해 HTML 원본의 내부 링크/이미지를 로컬 경로로 치환
-- 유튜브 임베딩은 로컬 `file://` 에서는 동작하지 않음
+- `media_map.csv` 가 있으면 `<video>`/`<audio>`/`<source>` src·poster 도 로컬 경로로 치환
+- Ghost 마이그레이션 과정에서 제거된 XE3 포럼 시절 비디오는 Wayback 포럼 스냅샷에서 복구해 원래 위치에 재삽입 (`<figure class="recovered-media">`)
+- 유튜브 임베딩은 로컬 `file://` 에서는 동작하지 않음 (의도적으로 치환 대상에서 제외)
+
+## MEDIA (opt-in)
+
+- `--images` 가 처리하지 않는 비이미지 미디어 전용 파이프라인. `PIPELINE_ORDER` 에 포함되지 않으며 `--media` 를 명시해야 실행
+- 수집 대상: ① GDrive BGM/OST 앵커 ② 현재 HTML 의 `<video>`/`<audio>` 태그 ③ 포럼 시절 삭제된 비디오 (Wayback 복구) ④ 직접 미디어 확장자 앵커
+- 상세: [CONTEXT_MEDIA.md](CONTEXT_MEDIA.md)

@@ -157,6 +157,14 @@ ARCHIVE_EXTS: set[str] = set(_file_types.get("archive_exts", [
 ]))
 DOWNLOADABLE_EXTS: set[str] = IMG_EXTS | ARCHIVE_EXTS
 
+VIDEO_EXTS: set[str] = set(_file_types.get("video_exts", [
+    ".mp4", ".webm", ".mov", ".mkv", ".m4v",
+]))
+AUDIO_EXTS: set[str] = set(_file_types.get("audio_exts", [
+    ".mp3", ".wav", ".ogg", ".m4a", ".flac", ".aac",
+]))
+MEDIA_EXTS: set[str] = VIDEO_EXTS | AUDIO_EXTS
+
 DL_KEYWORDS: set[str] = set(_file_types.get("dl_keywords", [
     "다운로드", "download", "다운", "받기", "저장",
     "고화질 이미지", "고화질", "이미지", "원본",

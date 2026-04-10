@@ -99,6 +99,8 @@ avillontoon = "Gallery"
 [file_types]
 img_exts = [".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg"]
 archive_exts = [".zip", ".rar", ".7z", ".tar", ".gz", ".tgz"]
+video_exts = [".mp4", ".webm", ".mov", ".mkv", ".m4v"]
+audio_exts = [".mp3", ".wav", ".ogg", ".m4a", ".flac", ".aac"]
 dl_keywords = [
     "다운로드", "download", "다운", "받기", "저장",
     "고화질 이미지", "고화질", "이미지", "원본",

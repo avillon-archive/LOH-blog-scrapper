@@ -41,6 +41,17 @@
 | `done_posts_images.csv` | `post_url,image_count` | 포스트별 이미지 처리 완료 |
 | `downloaded_urls.txt` | (헤더 없음, prefix 형식) | **CSV 대상 아님** |
 
+### 미디어 트래킹 (`--media` 전용)
+
+| 파일 | 헤더 | 비고 |
+|------|------|------|
+| `media_map.csv` | `post_url,media_url,relative_path,anchor_type,anchor_text` | post 단위 저장 — 동일 URL 이 여러 포스트에서 공유될 수 있음 |
+| `failed_media.csv` | `post_url,media_url,reason` | `ImageFailedLog` 재사용 (3-tuple) |
+| `done_posts_media.csv` | `post_url,media_count` | 포스트별 미디어 처리 완료 |
+| `downloaded_media_urls.txt` | (헤더 없음, `media:{clean_url}` prefix) | **CSV 대상 아님** — URL 단위 seen 집합 |
+
+`anchor_type` ∈ `{inline, positioned, append}` — html_local 주입 힌트 (상세: [CONTEXT_MEDIA.md](CONTEXT_MEDIA.md)).
+
 ### stale (재생성 대상)
 
 | 파일 | 헤더 | 비고 |
