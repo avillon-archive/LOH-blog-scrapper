@@ -168,6 +168,11 @@ def process_post(
     for idx, (img_url, utype) in enumerate(images, start=1):
         if _clean_img_url(img_url) in non_image_urls:
             continue
+        # 이미 매핑된 이미지는 재다운로드/heading 폴백 건너뜀
+        if _clean_img_url(img_url) in image_map:
+            ok += 1
+            succeeded_urls.append(img_url)
+            continue
         how = download_one_image(
             img_url, utype, post_url, folder, idx,
             seen_urls, img_hashes, image_map, thumb_hashes,

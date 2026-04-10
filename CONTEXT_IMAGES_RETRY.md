@@ -7,9 +7,10 @@
 ## --retry 재처리
 
 1. `failed_images.csv`에서 고유 포스트 URL 추출 → 각 포스트의 모든 이미지 재처리
-2. 이전 성공 이미지는 `seen_urls` 히트 → `"already"`(ok) → `remove_from_failed_batch()`로 해당 failed 엔트리 제거
-3. 모든 이미지 ok(fail=0)이면 `done_post_urls`에 추가
-4. **저장=0이어도** `"already"` 처리로 failed 엔트리가 줄어들어 다음 --retry 대상 감소
+2. `image_map` 히트 이미지는 `download_one_image()` 호출 전에 스킵 (재다운로드·heading 폴백 모두 우회) → `succeeded_urls`에 추가되어 `failed_images` 엔트리 제거
+3. 이전 성공 이미지는 `seen_urls` 히트 → `"already"`(ok) → `remove_from_failed_batch()`로 해당 failed 엔트리 제거
+4. 모든 이미지 ok(fail=0)이면 `done_post_urls`에 추가
+5. **저장=0이어도** `"already"`/`image_map` 스킵 처리로 failed 엔트리가 줄어들어 다음 --retry 대상 감소
 
 ### 알려진 엣지 케이스
 
@@ -48,6 +49,7 @@
 - **인덱스 미리 구축 없음**: 실패 이미지마다 lazy로 도너 검색 (±2개월 공지사항 HTML만 파싱)
 - **카테고리 필터**: `html_index` path에 `공지사항/`이 포함되는지로 빠르게 판별 (HTML 파싱 전)
 - `[image_overrides]`에 이미 매핑된 URL은 override가 먼저 적용되므로 heading 폴백까지 도달하지 않음
+- 이미 `image_map`에 매핑된 URL은 `process_post()` 루프 앞단에서 건너뛰므로 heading 폴백까지 도달하지 않음 (이전 retry 에서 heading 폴백으로 복구된 이미지가 다음 retry 에서 재실행되는 것을 방지)
 
 ---
 
