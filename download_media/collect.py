@@ -28,6 +28,13 @@ _EMBED_HOSTS = {
     "vimeo.com", "www.vimeo.com", "player.vimeo.com",
 }
 
+# 원격 리라이트 대상 키를 clean_url 형태로 정규화 — config 에 raw 든 clean 이든
+# 어떤 형태로 넣어도 매칭되도록. (_detect_non_image_urls 가 이미 clean 형태를
+# 반환하므로 _add 의 입력 url 과 동일 기준으로 비교해야 한다.)
+_REMOTE_REWRITE_KEYS_CLEAN: frozenset[str] = frozenset(
+    _clean_img_url(k) for k in MEDIA_REMOTE_REWRITES
+)
+
 
 def _is_embed_host(url: str) -> bool:
     host = (urllib.parse.urlparse(url).hostname or "").lower()
@@ -52,7 +59,7 @@ def collect_media_urls(
         if _is_embed_host(url):
             return
         # 원격 리라이트 대상은 수집 스킵 (R2 등에서 직접 서빙)
-        if _clean_img_url(url) in MEDIA_REMOTE_REWRITES:
+        if _clean_img_url(url) in _REMOTE_REWRITE_KEYS_CLEAN:
             return
         key = (mtype, _clean_img_url(url))
         if key in seen_keys:

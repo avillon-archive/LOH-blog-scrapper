@@ -629,11 +629,15 @@ def run_html_local(
         f"[HTML-LOCAL] media_map 로드: {len(media_url_to_path)}개 URL, "
         f"{len(post_media_index)}개 포스트"
     )
-    # 원격 리라이트 (gdrive → R2 등) 병합: R2 엔트리가 로컬 매핑보다 우선
+    # 원격 리라이트 (gdrive → R2 등) 병합: R2 엔트리가 로컬 매핑보다 우선.
+    # 키는 clean_url 로 정규화 — config 에 raw 든 clean 이든 동일 기준으로 조회된다.
     if MEDIA_REMOTE_REWRITES:
-        media_url_to_path.update(MEDIA_REMOTE_REWRITES)
+        _cleaned_remote = {
+            clean_url(k): v for k, v in MEDIA_REMOTE_REWRITES.items()
+        }
+        media_url_to_path.update(_cleaned_remote)
         print(
-            f"[HTML-LOCAL] media_remote.rewrites 병합: {len(MEDIA_REMOTE_REWRITES)}개"
+            f"[HTML-LOCAL] media_remote.rewrites 병합: {len(_cleaned_remote)}개"
         )
 
     # 소스: done_html.txt 기반 (html_path, post_url) 목록
