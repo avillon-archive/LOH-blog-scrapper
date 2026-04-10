@@ -39,16 +39,83 @@ from .persistence import (
     save_image,
 )
 from .state import (
+    _done_buf,
     _done_posts_buf,
     _fb_done_buf,
     _fb_img_hash_buf,
     _fb_kakao_pf_log_buf,
     _fb_map_buf,
     _fb_multilang_log_buf,
+    _img_hash_buf,
+    _map_buf,
     _save_lock,
     _state_lock,
 )
 from .url_utils import _clean_img_url, _safe_filename, _seen_key
+
+
+# ---------------------------------------------------------------------------
+# heading 기반 폴백 저장 헬퍼
+# ---------------------------------------------------------------------------
+
+
+def _try_heading_fallback(
+    img_url: str,
+    utype: str,
+    post_url: str,
+    post_date: str,
+    soup: BeautifulSoup,
+    folder: Path,
+    idx: int,
+    seen_urls: set[str],
+    img_hashes: dict[str, str],
+    image_map: dict[str, str],
+    all_posts: list[tuple[str, str, str]],
+    html_index: dict[str, Path],
+) -> str:
+    """heading 폴백으로 이미지를 다운로드·저장한다. 성공 방식 문자열 또는 "" 반환."""
+    from .fallback_heading import _fetch_heading_fallback
+
+    payload = _fetch_heading_fallback(
+        img_url, post_url, post_date, soup,
+        all_posts, html_index, image_map,
+    )
+    if payload is None:
+        return ""
+
+    content, final_url, content_type, content_disposition = payload
+    filename = _determine_filename(utype, img_url, final_url, content_type,
+                                   content_disposition, idx)
+    safe_name = _safe_filename(filename)
+    content_hash = _sha256_bytes(content)
+
+    seen_key = _seen_key(utype, img_url)
+    img_key = _clean_img_url(img_url)
+
+    with _state_lock:
+        if seen_key in seen_urls:
+            return "already"
+        existing_rel = img_hashes.get(content_hash)
+        if existing_rel is not None:
+            seen_urls.add(seen_key)
+            if img_key not in image_map:
+                image_map[img_key] = existing_rel
+                _map_buf.add(csv_line(img_key, existing_rel))
+            return "dup"
+        seen_urls.add(seen_key)
+
+    folder.mkdir(parents=True, exist_ok=True)
+    with _save_lock:
+        saved_name = save_image(content, safe_name, folder)
+    rel = (folder / saved_name).relative_to(ROOT_DIR).as_posix()
+    with _state_lock:
+        img_hashes[content_hash] = rel
+        if img_key not in image_map:
+            image_map[img_key] = rel
+            _map_buf.add(csv_line(img_key, rel))
+    _done_buf.add(seen_key)
+    _img_hash_buf.add(csv_line(content_hash, rel, ""))
+    return "heading"
 
 
 # ---------------------------------------------------------------------------
@@ -68,6 +135,7 @@ def process_post(
     *,
     retry_mode: bool = False,
     published_time: str = "",
+    all_posts: "list[tuple[str, str, str]] | None" = None,
 ) -> PostProcessResult:
     if post_url in done_post_urls and not retry_mode:
         return PostProcessResult(ok=0, fail=0, post_fetch_ok=True)
@@ -106,6 +174,16 @@ def process_post(
             post_soup_cache=post_soup_cache,
             post_date=post_date,
         )
+        # ── heading 기반 폴백 (공지사항 --retry 전용) ────────────────
+        if (not how and retry_mode and category == "공지사항"
+                and all_posts is not None and html_index is not None
+                and utype in ("img", "gdrive")):
+            how = _try_heading_fallback(
+                img_url, utype, post_url, post_date, soup,
+                folder, idx, seen_urls, img_hashes, image_map,
+                all_posts, html_index,
+            )
+        # ─────────────────────────────────────────────────────────────
         if how:
             ok += 1
             succeeded_urls.append(img_url)

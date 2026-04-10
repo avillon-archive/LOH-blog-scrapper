@@ -21,7 +21,33 @@
 
 ### 이미지 오버라이드
 
-`config.toml`의 `[image_overrides]`로 영구 깨진 URL → 블로그 URL 수동 매핑. `--retry` 실행 시 `download_one_image()` 진입부에서 체크, `image_map`에 기록 + `failed_images`에서 제거. target이 로컬에 없으면 target URL에서 직접 다운로드(Wayback 포함). 다음 `html_local` 실행 시 stale 추적으로 자동 반영.
+`config.toml`의 `[image_overrides]`로 영구 깨진 URL → 블로그 URL 수동 매핑. `--retry` 실행 시 `download_one_image()` 진입부에서 체크, `image_map`에 기록 + `failed_images`에서 제거. target이 로컬에 없으면 target URL에서 직접 다운로드(Wayback 포함). 다운로드한 콘텐츠의 SHA256 해시가 `img_hashes`에 이미 있으면 기존 경로를 재사용하여 중복 저장을 방지한다. 다음 `html_local` 실행 시 stale 추적으로 자동 반영.
+
+### heading 기반 폴백 (공지사항 전용)
+
+`download_images/fallback_heading.py`. `--retry` 모드에서 `download_one_image()` 실패 후, 공지사항(`category == "공지사항"`) 포스트의 `img` 타입 이미지에 한해 자동 시도.
+
+#### 동작 원리
+
+공지사항 포스트는 동일 섹션(예: "아슬란과의 합동 훈련")이 날짜별로 반복 등장하며 같은 이미지를 사용한다. 깨진 이미지의 직전 `<h3>` heading을 추출하고, 다른 공지사항 포스트에서 유사한 heading을 가진 섹션을 찾아 위치 기반으로 이미지를 복구한다.
+
+#### 처리 흐름
+
+1. 깨진 이미지의 직전 `<h3>` 텍스트 및 섹션 내 위치(0-based) 추출 (`_find_heading_context`)
+2. ±2개월 범위의 공지사항 포스트 중, `difflib.SequenceMatcher` 유사도 ≥ 0.90인 h3를 가진 도너 포스트를 날짜 근접순으로 검색 (`_find_donor_posts`)
+3. 도너 섹션의 이미지 개수가 원본 섹션과 다르면 스킵 (이미지 개수 가드)
+4. 같은 position의 도너 이미지 URL로 `_fetch_image()` → `_fetch_wayback_image()` 시도
+5. 도너 이미지도 깨졌으면 다음 도너 시도
+
+#### 제약
+
+- **카테고리**: 공지사항만 대상 (h3 섹션 반복 패턴이 있는 카테고리)
+- **utype**: `img`, `gdrive` (h3 섹션 아래 `<img>` 태그). `og_image`, `linked_*` 제외
+- **유사도 임계값**: 0.90 (하드코딩). "Event 7. X" vs "Event 5. X" → 0.95 통과, 완전히 다른 키워드 → 0.50 거부
+- **날짜 범위**: ±62일 (~2개월)
+- **인덱스 미리 구축 없음**: 실패 이미지마다 lazy로 도너 검색 (±2개월 공지사항 HTML만 파싱)
+- **카테고리 필터**: `html_index` path에 `공지사항/`이 포함되는지로 빠르게 판별 (HTML 파싱 전)
+- `[image_overrides]`에 이미 매핑된 URL은 override가 먼저 적용되므로 heading 폴백까지 도달하지 않음
 
 ---
 

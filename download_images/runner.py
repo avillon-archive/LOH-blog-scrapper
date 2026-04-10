@@ -161,10 +161,12 @@ def run_images(
     image_map = load_image_map(IMAGE_MAP_FILE)
     done_post_urls: dict[str, int] = {} if (force_download or retry_mode) else _load_done_post_urls(DONE_POSTS_FILE)
 
+    all_posts_ref: list[tuple[str, str, str]] | None = None
     if retry_mode:
         if not FAILED_FILE.exists():
             print("[이미지] 실패 파일이 없습니다.")
             return
+        all_posts_ref = posts  # heading 폴백용 전체 포스트 참조 (필터링 전)
         fail_posts = load_failed_post_urls(FAILED_FILE)
         posts = [(url, date, *rest) for url, date, *rest in posts if url in fail_posts]
         print(f"[이미지] 재처리 대상: {len(posts)}개 포스트")
@@ -194,6 +196,7 @@ def run_images(
                 html_index=html_index,
                 retry_mode=retry_mode,
                 published_time=pub_time,
+                all_posts=all_posts_ref,
             ): (url, date)
             for url, date, pub_time, *_ in posts
         }

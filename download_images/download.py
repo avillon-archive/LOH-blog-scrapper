@@ -174,6 +174,20 @@ def download_one_image(
         if payload is not None:
             content, final_url, ctype, cd = payload
             content_hash = _sha256_bytes(content)
+            # 해시 중복 체크 — 이미 동일 콘텐츠가 저장돼 있으면 재사용
+            with _state_lock:
+                existing_rel = img_hashes.get(content_hash)
+            if existing_rel is not None:
+                with _state_lock:
+                    seen_urls.add(seen_key)
+                    image_map[clean_url] = existing_rel
+                    if target_clean not in image_map:
+                        image_map[target_clean] = existing_rel
+                        _map_buf.add(csv_line(target_clean, existing_rel))
+                _map_buf.add(csv_line(clean_url, existing_rel))
+                _done_buf.add(seen_key)
+                remove_from_failed(post_url, img_url=img_url)
+                return "override"
             filename = _determine_filename(utype, override_target, final_url, ctype, cd, idx)
             safe_name = _safe_filename(filename)
             folder.mkdir(parents=True, exist_ok=True)
