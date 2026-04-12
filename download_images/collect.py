@@ -62,7 +62,7 @@ def collect_image_urls(soup: BeautifulSoup, post_url: str) -> list[tuple[str, st
         path_ext = Path(parsed_src.path).suffix.lower()
         if is_gdrive_host(hostname):
             _add(abs_src, "gdrive")
-        elif "/content/images/" in parsed_src.path and hostname == BLOG_HOST:
+        elif "/content/images/" in parsed_src.path and hostname in (BLOG_HOST, "storage.ghost.io"):
             _add(abs_src, "img")
         elif hostname in (COMMUNITY_CDN_HOST, COMMUNITY_SITE_HOST, GAME_CDN_HOST) and path_ext in IMG_EXTS:
             _add(abs_src, "img")

@@ -24,7 +24,9 @@ python -m download_images --retry-fallback   # multilang/kakao 폴백
 
 URL 정규화: `clean_url()` (utils.py)이 모든 정규화를 담당. Ghost CMS `?ref=` 파라미터 제거, `/size/wNhN` 리사이즈 경로 제거(`w600`, `w256h256` 등), clovergames CDN `/p/`→`/o/` 변환(프리뷰→원본), trailing slash 제거. `_clean_img_url(url)`은 `clean_url()`의 얇은 래퍼.
 
-`<img>` 수집 시 제외: `author-profile-image`, `kg-bookmark-icon` 클래스, `author-card` 내부. 수집 대상 호스트: `BLOG_HOST`(`/content/images/` 경로), `COMMUNITY_CDN_HOST`(`community-ko-cdn.lordofheroes.com`), `COMMUNITY_SITE_HOST`(`community-ko.lordofheroes.com`), `GAME_CDN_HOST`(`cdn.clovergames.io`). Google Drive/이미지 호스트는 `is_gdrive_host()` (config.py)로 판별 — `gdrive_hosts` set 매칭 + `*.googleusercontent.com` 자동 인식(lh3~lh6 등 번호 무관). `/spreadsheets/`, `/forms/` 경로와 `_SKIP_LINK_HOSTS` 도메인은 건너뜀.
+`<img>` 수집 시 제외: `author-profile-image`, `kg-bookmark-icon` 클래스, `author-card` 내부. 수집 대상 호스트: `BLOG_HOST`(`/content/images/` 경로) 및 `storage.ghost.io`(Ghost 플랫폼 스토리지, 동일 `/content/images/` 경로), `COMMUNITY_CDN_HOST`(`community-ko-cdn.lordofheroes.com`), `COMMUNITY_SITE_HOST`(`community-ko.lordofheroes.com`), `GAME_CDN_HOST`(`cdn.clovergames.io`). Google Drive/이미지 호스트는 `is_gdrive_host()` (config.py)로 판별 — `gdrive_hosts` set 매칭 + `*.googleusercontent.com` 자동 인식(lh3~lh6 등 번호 무관). `/spreadsheets/`, `/forms/` 경로와 `_SKIP_LINK_HOSTS` 도메인은 건너뜀.
+
+> **호스트 변경 (2026-04):** Ghost가 이미지 호스팅을 `blog-ko.lordofheroes.com/content/images/` → `storage.ghost.io/.../content/images/`로 변경. 기존 포스트는 예전 URL을 유지하지만, 이후 작성된 글은 새 호스트를 사용. 두 호스트 모두 동일한 `/content/images/` 경로 패턴으로 수집. 컨텐츠 해시 중복 처리로 동일 이미지의 재다운로드 방지.
 
 `_detect_non_image_urls(soup, post_url)`: GDrive 앵커 주변에서 BGM/OST 등 비이미지 키워드 감지 시 제외. 검사 범위: ①앵커 텍스트, ②같은 부모 블록 내 이전 sibling(200자), ③content_tag **내부**의 이전 heading. content_tag 외부 heading은 무시.
 
