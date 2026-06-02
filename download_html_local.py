@@ -13,7 +13,7 @@ import threading
 import urllib.parse
 from pathlib import Path
 
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, Tag
 
 from asset_downloader import CssDownloader, SiteImageDownloader
 from config import (
@@ -157,6 +157,7 @@ class HtmlLocalizer:
         self._rewrite_internal_links()
         self._rewrite_home_logo()
         self._fix_youtube_iframes()
+        self._flatten_degenerate_nesting()
         self._remove_scripts()
         return str(self._soup)
 
@@ -499,6 +500,34 @@ class HtmlLocalizer:
             if iframe.has_attr("height"):
                 del iframe["height"]
             iframe["style"] = "width:100%; aspect-ratio:16/9;"
+
+    # 단일자식 동일-name 중첩이 의미 없이 쌓일 수 있는 inline 태그.
+    _FLATTEN_INLINE_TAGS = [
+        "strong", "b", "em", "i", "u", "s", "strike",
+        "mark", "span", "small", "sub", "sup", "a", "code",
+    ]
+
+    def _flatten_degenerate_nesting(self) -> None:
+        """의미 없는 단일자식 동일-name inline 중첩을 1겹으로 축약.
+
+        `<strong><strong>…1008…<strong>X</strong>…</strong></strong>` 같은 마크업 bloat 정리.
+        규칙: inline 태그 T 의 자식이 정확히 1개의 Tag 이고 그 자식이 T 와 같은 name·동일 속성이면
+        내부 태그를 unwrap(콘텐츠를 부모로 승격). 속성이 다르면 보존(보수적). 텍스트·렌더 불변.
+        find_all·unwrap 모두 iterative 라 깊은 트리에서도 재귀 없이 처리한다.
+        """
+        for tag in self._soup.find_all(self._FLATTEN_INLINE_TAGS):
+            # 축약 중 트리가 바뀌므로 동일-name 단일 자식이 사라질 때까지 반복.
+            while True:
+                children = [c for c in tag.children]
+                if (
+                    len(children) == 1
+                    and isinstance(children[0], Tag)
+                    and children[0].name == tag.name
+                    and dict(children[0].attrs) == dict(tag.attrs)
+                ):
+                    children[0].unwrap()
+                else:
+                    break
 
     def _remove_scripts(self) -> None:
         for script in self._soup.find_all("script"):
