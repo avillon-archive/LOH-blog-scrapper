@@ -167,7 +167,11 @@ class HtmlLocalizer:
             href = link.get("href", "")
             if not href:
                 continue
-            filename = self._css.download(href)
+            # href 를 post URL 기준 절대 URL 로 해석 후 다운로드. host-relative
+            # (예: "/assets/built/screen.css?v=…") 를 그대로 넘기면 scheme/host 가
+            # 없어 매 요청이 실패→재시도 백오프(3s)→캐시 미적중 무한반복이 된다.
+            abs_href = urllib.parse.urljoin(self._post_url, href)
+            filename = self._css.download(abs_href)
             if filename:
                 link["href"] = f"{self._assets_prefix}{filename}"
 
