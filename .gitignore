@@ -20,5 +20,8 @@ migrate_logs.py
 # 개인
 *.note
 
+# 인계 문서 (세션 간 임시, 커밋 안 함)
+HANDOFF*.md
+
 # Claude Code
 .claude/*.json

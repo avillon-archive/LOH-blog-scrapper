@@ -53,11 +53,13 @@ DONE_FILE = ROOT_DIR / "done_html_local.csv"
 FAILED_FILE = ROOT_DIR / "failed_html_local.csv"
 STALE_FILE = ROOT_DIR / "stale_html_local.csv"
 
-# 인라인 style background-image 패턴
-BG_IMAGE_RE = re.compile(
-    r"""(background(?:-image)?\s*:[^;]*url\(\s*['"]?)([^'")]+)(['"]?\s*\))""",
-    re.IGNORECASE,
-)
+# background[-image] 선언 + 그 안의 개별 url() 토큰.
+# image-set()/-webkit-image-set() 의 다중 후보(1x·2x …)를 모두 리라이트하기 위해
+# "선언 단위로 매칭 → 선언 내 모든 url() 치환" 2단계로 처리한다. 선언당 url() 하나만
+# 잡으면 image-set 의 1x 후보(remote: storage.ghost.io 또는 host-relative /content/images/)가
+# 로컬화되지 않고 남는다.
+BG_DECL_RE = re.compile(r"background(?:-image)?\s*:[^;}]*", re.IGNORECASE)
+CSS_URL_TOKEN_RE = re.compile(r"""url\(\s*(['"]?)([^'")]+)\1\s*\)""")
 
 _EXCLUDED_PATHS = frozenset(("tag", "author", "rss", "assets", "content", "public"))
 
@@ -244,16 +246,20 @@ class HtmlLocalizer:
             tag["style"] = self._rewrite_bg_urls(tag["style"])
 
     def _rewrite_bg_urls(self, css_text: str) -> str:
-        """CSS 텍스트 내 url() 참조를 image_map 기반으로 리라이트."""
+        """CSS 텍스트의 background[-image] 선언 내 모든 url() 을 image_map/site_img 기반으로
+        리라이트. image-set() 의 1x·2x 등 다중 후보를 빠짐없이 처리한다."""
 
-        def _replace(m: re.Match) -> str:
-            url_val = m.group(2)
+        def _rewrite_url_token(u: re.Match) -> str:
+            quote, url_val = u.group(1), u.group(2)
             if url_val.startswith("data:"):
-                return m.group(0)
+                return u.group(0)
             new_src, _ = self._rewrite_img(url_val)
-            return m.group(1) + new_src + m.group(3)
+            return f"url({quote}{new_src}{quote})"
 
-        return BG_IMAGE_RE.sub(_replace, css_text)
+        def _rewrite_decl(decl: re.Match) -> str:
+            return CSS_URL_TOKEN_RE.sub(_rewrite_url_token, decl.group(0))
+
+        return BG_DECL_RE.sub(_rewrite_decl, css_text)
 
     # -- 앵커 링크 로컬화 --
 

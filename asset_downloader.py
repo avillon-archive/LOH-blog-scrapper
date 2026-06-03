@@ -7,7 +7,7 @@ import threading
 import urllib.parse
 from pathlib import Path
 
-from config import BLOG_IMAGE_PREFIX as _BLOG_IMAGE_PREFIX
+from config import BLOG_HOST as _BLOG_HOST, BLOG_IMAGE_PREFIX as _BLOG_IMAGE_PREFIX
 from utils import fetch_with_retry
 
 # CSS url(...) 참조 패턴
@@ -30,14 +30,22 @@ class BaseAssetDownloader:
 
     _default_name: str
     _default_ext: str
+    _dedup: bool = False  # True 면 콘텐츠 SHA-256 dedup 활성(SiteImageDownloader)
 
     def __init__(self, assets_dir: Path) -> None:
         self._assets_dir = assets_dir
         self._lock = threading.Lock()
         self._url_locks: dict[str, threading.Lock] = {}
+        # {sha256: filename}. 최초 download() 시 assets_dir 스캔으로 빌드(_dedup 전용).
+        self._hash_index: dict[str, str] | None = None
 
     def download(self, url: str) -> str | None:
-        """에셋을 다운로드하고 로컬 파일명 반환. 이미 있으면 파일명만 반환."""
+        """에셋을 다운로드하고 로컬 파일명 반환. 이미 있으면 파일명만 반환.
+
+        `_dedup` 활성 시(SiteImageDownloader) fetch 후 콘텐츠 SHA-256 으로 dedup:
+        바이트 동일 자산은 먼저 받은 canonical 파일을 재사용해 중복 생성을 막는다
+        (storage.ghost.io ↔ 블로그 자기호스트가 같은 바이트를 다른 URL 로 서빙하는 경우 대응).
+        """
         if not self._should_download(url):
             return None
 
@@ -58,8 +66,43 @@ class BaseAssetDownloader:
             resp = fetch_with_retry(url)
             if resp is None:
                 return None
+            if self._dedup:
+                return self._save_dedup(resp, filename, local_path, url)
             self._save(resp, local_path, url)
             return filename
+
+    def _save_dedup(self, resp, filename: str, local_path: Path, url: str) -> str:
+        """콘텐츠 SHA-256 dedup 저장. 바이트 동일 기존 파일이 있으면 그 파일명 반환."""
+        index = self._ensure_index()
+        digest = hashlib.sha256(resp.content).hexdigest()
+        with self._lock:
+            existing = index.get(digest)
+            if existing is None:
+                index[digest] = filename  # canonical 예약(동시 동일바이트 fetch 중복 방지)
+        if existing is not None and (self._assets_dir / existing).exists():
+            return existing
+        self._save(resp, local_path, url)
+        return filename
+
+    def _ensure_index(self) -> dict[str, str]:
+        """assets_dir 를 1회 스캔해 {sha256: filename} in-memory 인덱스 빌드.
+
+        영속 CSV 대신 매 런 스캔 — 고아 정리(파일 삭제) 후에도 drift 없음.
+        같은 해시 충돌 시 정렬상 먼저 오는 파일명을 canonical 로 채택(setdefault).
+        """
+        if self._hash_index is not None:
+            return self._hash_index
+        with self._lock:
+            if self._hash_index is not None:
+                return self._hash_index
+            index: dict[str, str] = {}
+            if self._assets_dir.exists():
+                for p in sorted(self._assets_dir.iterdir()):
+                    if p.is_file():
+                        digest = hashlib.sha256(p.read_bytes()).hexdigest()
+                        index.setdefault(digest, p.name)
+            self._hash_index = index
+            return index
 
     def _filename(self, url: str) -> str:
         """URL → {stem}_{md5[:8]}.{ext} 파일명."""
@@ -113,9 +156,20 @@ class SiteImageDownloader(BaseAssetDownloader):
 
     _default_name = "image.png"
     _default_ext = "png"
+    _dedup = True  # storage.ghost.io ↔ blog 자기호스트 바이트 동일 자산 중복 차단
 
     def _should_download(self, url: str) -> bool:
-        return url.startswith(_BLOG_IMAGE_PREFIX)
+        # 블로그 자기 호스트의 /content/images/ (구도메인 등 기존 동작 보존)
+        if url.startswith(_BLOG_IMAGE_PREFIX):
+            return True
+        # 신규 ghost.io 블로그는 프로필 아바타·favicon·icon 을 공유 CDN storage.ghost.io 로
+        # 서빙한다. content 수집 필터와 동일 기준 — host + /content/images/ 로 허용.
+        # 죽은 구도메인·gdrive·서드파티는 host 불일치로 탈락(아카이브 보존 정책 유지).
+        parsed = urllib.parse.urlparse(url)
+        return (
+            "/content/images/" in parsed.path
+            and (parsed.hostname or "").lower() in (_BLOG_HOST, "storage.ghost.io")
+        )
 
     def _save(self, resp, local_path: Path, url: str) -> None:
         local_path.write_bytes(resp.content)
