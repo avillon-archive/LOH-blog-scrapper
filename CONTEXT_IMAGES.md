@@ -61,7 +61,7 @@ URL 정규화: `clean_url()` (utils.py)이 모든 정규화를 담당. Ghost CMS
 
 ## 해시 중복 처리
 
-SHA-256 해시 기반. 해시 중복 시 저장 생략, `image_map`에 기존 경로 매핑. 이미지는 최초 저장 위치에서 이동하지 않는다. 레거시 `thumbnail_hashes.txt (레거시)`에서 `image_hashes.csv`로 자동 마이그레이션.
+SHA-256 해시 기반. 해시 중복 시 저장 생략, `image_map`에 기존 경로 매핑. 이미지는 최초 저장 위치에서 이동하지 않는다. 캐시는 `image_hashes.csv`(`sha256_hash,relative_path,is_thumbnail`)로 다운로드 중 점증 기록되며, 썸네일(og:image) 여부는 `is_thumbnail` 컬럼에 표시.
 
 ---
 

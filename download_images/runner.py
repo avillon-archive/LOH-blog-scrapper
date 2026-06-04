@@ -33,7 +33,7 @@ from .constants import (
 )
 from .fallback_kakao import KakaoPFPost, _build_kakao_pf_index
 from .fallback_multilang import _build_multilang_date_index
-from .hashing import _load_or_build_img_hashes
+from .hashing import _load_img_hashes
 from .models import PostProcessResult
 from .persistence import (
     _load_done_post_urls,
@@ -157,7 +157,7 @@ def run_images(
     IMAGES_DIR.mkdir(parents=True, exist_ok=True)
 
     seen_urls = set() if force_download else load_seen(DONE_FILE)
-    img_hashes, thumb_hashes = _load_or_build_img_hashes()
+    img_hashes, thumb_hashes = _load_img_hashes()
     image_map = load_image_map(IMAGE_MAP_FILE)
     done_post_urls: dict[str, int] = {} if (force_download or retry_mode) else _load_done_post_urls(DONE_POSTS_FILE)
 
