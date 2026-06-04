@@ -50,7 +50,7 @@ CSS 다운로드·캐싱. CSS 내 `url()` 상대경로는 절대 URL로 정규�
 
 1. **CSS 로컬화**: `<link rel="stylesheet">` → CssDownloader 로컬 경로
 2. **이미지 리라이트**: `image_map.csv` 기반. 매핑 실패 시 SiteImageDownloader 폴백 또는 절대 URL. `srcset`·`data-src` 제거. `<style>` bg-image, `<meta og:image>`, JSON-LD도 처리.
-3. **비디오/오디오 태그 리라이트** (`_rewrite_video_audio_tags`): `<video>`·`<audio>`·`<source>` 의 `src`, `<video poster>` 를 `media_map.csv` 기반 로컬 경로로 치환. poster 는 `image_map.csv` 를 먼저 시도한 뒤 `media_map.csv` 폴백, 둘 다 실패하면 `poster` 속성 자체를 제거(깨진 이미지 플레이스홀더 방지). Cat A/B/D 용.
+3. **비디오/오디오 태그 리라이트** (`_rewrite_video_audio_tags`): `<video>`·`<audio>`·`<source>` 의 `src`, `<video poster>` 를 `media_map.csv` 기반 로컬 경로로 치환. poster 는 `image_map.csv` 를 먼저 시도한 뒤 `media_map.csv` 폴백, 둘 다 실패하면 `poster` 속성 자체를 제거(깨진 이미지 플레이스홀더 방지). Cat B 용 (`<video>/<audio>` 태그가 현재 HTML 에 그대로 있는 경우). Cat A/D 앵커는 4번, Cat C 주입은 5번이 담당.
 4. **앵커 에셋 로컬화**: `<a href>`가 `image_map.csv` **또는** `media_map.csv` 에 있는 외부 URL을 가리키면 로컬 상대경로로 치환. CDN 이미지, GDrive 이미지/오디오, 직접 mp4 앵커 등이 대상. `clean_url()`로 정규화 후 매칭.
 5. **Cat C 복구 미디어 주입** (`_inject_recovered_media`): `media_map.csv` 의 `anchor_type=positioned` 엔트리는 `.post-content` 내부에서 `anchor_text` 를 부분 문자열로 포함하는 가장 얕은 `<p>/<h1-6>/<blockquote>` 직후에 `<figure class="recovered-media"><video controls>` 삽입. 매칭 실패 시 `append` 로 강등 → `.post-content` 말미에 단일 `<section class="recovered-media-append">` 로 묶어서 추가. 자세한 배경은 [CONTEXT_MEDIA.md](CONTEXT_MEDIA.md) 참조.
 6. **내부 링크 로컬화**: `slug_map` 기반 파일 간 상대경로. `/tag/{slug}/` → `{category}/index.html`. 블로그 루트 → `index.html`.

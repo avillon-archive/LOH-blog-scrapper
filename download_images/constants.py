@@ -47,7 +47,6 @@ DONE_POSTS_FILE = ROOT_DIR / "done_posts_images.csv"
 FAILED_FILE = ROOT_DIR / "failed_images.csv"
 IMAGE_MAP_FILE = ROOT_DIR / "image_map.csv"
 IMG_HASH_FILE = ROOT_DIR / "image_hashes.csv"
-MULTILANG_INDEX_CACHE = ROOT_DIR / "multilang_sitemap_index.json"  # 구 캐시 (삭제 대상)
 MULTILANG_PUBLISHED_INDEX = ROOT_DIR / "multilang_published_index.json"
 KAKAO_PF_INDEX_FILE = ROOT_DIR / "kakao_pf_index.json"
 FALLBACK_REPORT_FILE = ROOT_DIR / "fallback_report.csv"

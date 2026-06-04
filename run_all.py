@@ -79,7 +79,7 @@ DONE_HTML_FILE = ROOT_DIR / "done_html.csv"
 
 
 # ---------------------------------------------------------------------------
-# all_links.txt 자동 갱신
+# all_links.csv 자동 갱신
 # ---------------------------------------------------------------------------
 
 
@@ -98,7 +98,7 @@ def _newest_local_date(posts_file: Path) -> str:
 
 
 def _maybe_refresh_posts_list() -> None:
-    """all_links.txt가 없거나 사이트맵(posts + pages) 최신 날짜와 불일치하면 재빌드한다."""
+    """all_links.csv가 없거나 사이트맵(posts + pages) 최신 날짜와 불일치하면 재빌드한다."""
     local_date = _newest_local_date(LINKS_FILE)
 
     print("[포스트 목록] 사이트맵 최신 날짜 확인 중...")
@@ -115,30 +115,30 @@ def _maybe_refresh_posts_list() -> None:
     if local_date:
         print(f"[포스트 목록] 갱신 필요 (로컬={local_date} → 사이트맵={remote_date})")
     else:
-        print(f"[포스트 목록] all_links.txt 없음, 신규 생성 (사이트맵={remote_date})")
+        print(f"[포스트 목록] all_links.csv 없음, 신규 생성 (사이트맵={remote_date})")
 
     # ── posts ──────────────────────────────────────────────────────────
     try:
         count_posts, _ = build_and_write()
-        print(f"[포스트 목록] all_posts.txt 갱신 완료 ({count_posts}개 URL)")
+        print(f"[포스트 목록] all_posts.csv 갱신 완료 ({count_posts}개 URL)")
     except Exception as e:
-        print(f"[포스트 목록] all_posts.txt 갱신 실패: {e}")
+        print(f"[포스트 목록] all_posts.csv 갱신 실패: {e}")
         return
 
     # ── pages ──────────────────────────────────────────────────────────
     try:
         count_pages, _ = build_pages_and_write()
-        print(f"[포스트 목록] all_pages.txt 갱신 완료 ({count_pages}개 URL)")
+        print(f"[포스트 목록] all_pages.csv 갱신 완료 ({count_pages}개 URL)")
     except Exception as e:
-        print(f"[포스트 목록] all_pages.txt 갱신 실패: {e}")
-        # pages 실패해도 links 생성은 시도 (기존 all_pages.txt 있으면 활용 가능)
+        print(f"[포스트 목록] all_pages.csv 갱신 실패: {e}")
+        # pages 실패해도 links 생성은 시도 (기존 all_pages.csv 있으면 활용 가능)
 
     # ── links (merge) ──────────────────────────────────────────────────
     try:
         count_links = build_links_and_write()
-        print(f"[포스트 목록] all_links.txt 갱신 완료 ({count_links}개 URL, 최신={remote_date})")
+        print(f"[포스트 목록] all_links.csv 갱신 완료 ({count_links}개 URL, 최신={remote_date})")
     except Exception as e:
-        print(f"[포스트 목록] all_links.txt 갱신 실패: {e}")
+        print(f"[포스트 목록] all_links.csv 갱신 실패: {e}")
 
 
 def _maybe_refresh_single(
@@ -270,12 +270,12 @@ def main():
     parser.add_argument(
         "--posts",
         action="store_true",
-        help="all_posts.txt를 포스트 소스로 사용 (사이트맵 자동 갱신 건너뜀)",
+        help="all_posts.csv를 포스트 소스로 사용 (사이트맵 자동 갱신 건너뜀)",
     )
     parser.add_argument(
         "--pages",
         action="store_true",
-        help="all_pages.txt를 포스트 소스로 사용 (사이트맵 자동 갱신 건너뜀)",
+        help="all_pages.csv를 포스트 소스로 사용 (사이트맵 자동 갱신 건너뜀)",
     )
     parser.add_argument(
         "--custom",
@@ -286,7 +286,7 @@ def main():
                         help="기존 기록 무시하고 전체 재다운로드 (done 기록 무시)")
     parser.add_argument("--clean-fallback", action="store_true",
                         help="fallback 산출물 전체 삭제 (images_fallback/ + fallback CSV/로그)")
-    parser.add_argument("--sample", type=int, help="테스트용 랜덤 샘플 개수 (all_links.txt 행 수의 10%% 상한 적용)")
+    parser.add_argument("--sample", type=int, help="테스트용 랜덤 샘플 개수 (all_links.csv 행 수의 10%% 상한 적용)")
     parser.add_argument("--seed", type=int, help="샘플링 고정 시드(선택)")
     args = parser.parse_args()
 
@@ -409,14 +409,14 @@ def main():
             return
 
     if args.sample is not None:
-        # all_links.txt 행 수 기준 10% 상한 적용
+        # all_links.csv 행 수 기준 10% 상한 적용
         all_count = _count_file_lines(LINKS_FILE)
         if all_count > 0:
             cap = max(1, all_count // 10)
             if args.sample > cap:
                 print(
                     f"[샘플] --sample {args.sample} → 상한 적용 → {cap}"
-                    f" (all_links.txt {all_count}행의 10%)"
+                    f" (all_links.csv {all_count}행의 10%)"
                 )
                 args.sample = cap
 

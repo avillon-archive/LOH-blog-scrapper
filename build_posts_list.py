@@ -1,6 +1,6 @@
 """
 build_posts_list.py - parse sitemap-posts.xml / sitemap-pages.xml and build
-                      all_posts.txt / all_pages.txt / all_links.txt
+                      all_posts.csv / all_pages.csv / all_links.csv
 """
 import csv
 import re
@@ -145,7 +145,7 @@ def fetch_newest_sitemap_date() -> str:
 
 
 def build_and_write() -> tuple[int, list[tuple[str, str]]]:
-    """sitemap-posts.xml → all_posts.txt 갱신.
+    """sitemap-posts.xml → all_posts.csv 갱신.
 
     Returns:
         (작성된 URL 항목 수, entries 리스트).
@@ -156,7 +156,7 @@ def build_and_write() -> tuple[int, list[tuple[str, str]]]:
 
 
 def build_pages_and_write() -> tuple[int, list[tuple[str, str]]]:
-    """sitemap-pages.xml → all_pages.txt 갱신.
+    """sitemap-pages.xml → all_pages.csv 갱신.
 
     Returns:
         (작성된 URL 항목 수, entries 리스트).
@@ -227,7 +227,7 @@ def _build_multilang_links(cfg: dict[str, str | Path]) -> int:
 
 
 def build_links_and_write() -> int:
-    """all_posts.txt + all_pages.txt → all_links.txt 병합·중복 제거.
+    """all_posts.csv + all_pages.csv → all_links.csv 병합·중복 제거.
 
     posts 파일 항목이 우선. 동일 URL이 양쪽에 있으면 posts 날짜를 사용.
     날짜 내림차순 정렬 (날짜 없는 항목은 맨 뒤).
@@ -246,7 +246,7 @@ def build_links_and_write() -> int:
 
     if not merged:
         raise ValueError(
-            "all_links.txt 병합 대상이 없습니다. "
+            "all_links.csv 병합 대상이 없습니다. "
             f"{OUTPUT_FILE.name} / {PAGES_OUTPUT_FILE.name} 를 확인하세요."
         )
 

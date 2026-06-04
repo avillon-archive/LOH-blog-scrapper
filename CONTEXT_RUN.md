@@ -12,6 +12,7 @@
 | `--html-local` | 오프라인 열람용 HTML 생성 |
 | `--retry` | 실패 목록 재처리 (원본/Wayback만). `--media` 와 조합 시 `failed_media.csv` 기준 |
 | `--retry-fallback` | 실패 이미지 multilang/kakao 폴백 (별도 디렉토리에 보존) |
+| `--clean-fallback` | fallback 산출물 일괄 삭제 후 즉시 종료 (`images_fallback/` + fallback CSV/로그) |
 | `--posts` | all_posts.csv를 소스로 사용 (사이트맵 갱신 건너뜀) |
 | `--pages` | all_pages.csv를 소스로 사용 (사이트맵 갱신 건너뜀) |
 | `--custom` | custom_posts.txt를 소스로 사용 (사이트맵 갱신 건너뜀) |

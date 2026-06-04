@@ -18,7 +18,6 @@ from .constants import (
     KO_TO_LANG_CAT,
     MULTILANG_BLOG_HOSTS,
     MULTILANG_EARLIEST_DATE,
-    MULTILANG_INDEX_CACHE,
     MULTILANG_PUBLISHED_INDEX,
     _KO_SUFFIX_RE,
     _LANG_SUFFIX_MAP,
@@ -185,11 +184,6 @@ def _build_multilang_date_index() -> dict[str, list[tuple[str, str]]]:
     _multilang_cat_index = categories
 
     _save_published_cache(date_index, meta, categories)
-
-    # 구 sitemap 캐시 삭제
-    if MULTILANG_INDEX_CACHE.exists():
-        MULTILANG_INDEX_CACHE.unlink()
-        print("  구 sitemap 인덱스 캐시 삭제")
 
     return date_index
 
