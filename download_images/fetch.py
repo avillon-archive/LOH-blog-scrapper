@@ -12,10 +12,12 @@ from utils import fetch_with_retry
 
 from .constants import (
     _ARCHIVE_CONTENT_TYPES,
+    BLOG_CONTENT_HOSTS,
     COMMUNITY_CDN_HOST,
     GDRIVE_HOSTS,
     IMG_EXTS,
     is_gdrive_host,
+    LIVE_BLOG_HOSTS,
     WAYBACK_CDX_API,
 )
 from .models import PostSoupCache
@@ -172,6 +174,54 @@ def _fetch_image(
     resp = fetch_with_retry(url, allow_redirects=True)
     return _response_to_image(resp, allow_ext_fallback=allow_ext_fallback,
                               allow_archive=allow_archive, min_bytes=min_bytes)
+
+
+_GHOST_CONTENT_MARKER = "/content/"
+
+
+def _content_live_candidates(url: str) -> list[str]:
+    """blog-host/storage 의 `/content/…` URL → 각 언어 라이브 ghost host 의 canonical 후보.
+
+    ghost host(`*.ghost.io`)는 `/content/…` 요청을 자기 storage 계정으로 301 리다이렉트하므로
+    storage 계정 문자열 없이도 받아낼 수 있다. 죽은 구도메인(`blog-en.lordofheroes.com/content/…`)
+    이나 타 언어 storage 참조라도, 소유 언어의 ghost host 에서 200 으로 응답한다(타 언어 host 는 404).
+    원본 host 는 호출부에서 이미 시도하므로 제외한다(`!= url`).
+    """
+    parsed = urllib.parse.urlparse(url)
+    host = (parsed.hostname or "").lower()
+    marker = parsed.path.find(_GHOST_CONTENT_MARKER)
+    if marker == -1 or host not in BLOG_CONTENT_HOSTS:
+        return []
+    tail = parsed.path[marker:]
+    if parsed.query:
+        tail += "?" + parsed.query
+    candidates: list[str] = []
+    seen: set[str] = set()
+    for new_host in LIVE_BLOG_HOSTS:
+        cand = f"https://{new_host}{tail}"
+        if cand != url and cand not in seen:
+            seen.add(cand)
+            candidates.append(cand)
+    return candidates
+
+
+def _fetch_image_dualhost(
+    url: str,
+    *,
+    allow_ext_fallback: bool = False,
+    allow_archive: bool = False,
+    min_bytes: int = 1,
+) -> tuple[bytes, str, str, str] | None:
+    """`/content/…` URL 을 각 언어 라이브 ghost host 로 교체해 LIVE 로 시도(첫 성공 반환).
+
+    원본 fetch 실패(죽은 구도메인·타 언어 storage 등) 시 wayback 보다 먼저 시도하는 라이브 복구.
+    """
+    for cand in _content_live_candidates(url):
+        result = _fetch_image(cand, allow_ext_fallback=allow_ext_fallback,
+                              allow_archive=allow_archive, min_bytes=min_bytes)
+        if result is not None:
+            return result
+    return None
 
 
 _COMMUNITY_FORUM_HOST = "community-ko.lordofheroes.com"

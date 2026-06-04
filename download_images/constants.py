@@ -21,6 +21,7 @@ from config import (  # noqa: F401 — re-export for submodule consumers
     KAKAO_PF_PROFILE,
     KAKAO_TITLE_SIMILARITY,
     KO_TO_LANG_CAT,
+    LIVE_BLOG_HOSTS,
     MULTILANG_BLOG_HOSTS,
     MULTILANG_EARLIEST_DATE,
     NON_IMAGE_CONTEXT_KEYWORDS as _NON_IMAGE_CONTEXT_KEYWORDS,
@@ -29,6 +30,15 @@ from config import (  # noqa: F401 — re-export for submodule consumers
     WAYBACK_CDX_API,
 )
 from utils import SIZE_W_RE  # noqa: F401 – re-export
+
+# Ghost 콘텐츠 이미지를 서빙하는 host 집합 (3언어 dead 커스텀 도메인 + storage.ghost.io).
+# 수집 게이트(collect)와 라이브-host swap 복구(fetch)가 동일 host 술어를 공유해야 한다 — 한쪽만
+# 현 언어 host 로 좁히면 cross-language /content/images/ 참조(KO 본문의 blog-en/ja/content/… 등)가
+# 수집 단계에서 탈락해 복구 계층까지 도달하지 못한다(드리프트 방지용 단일 출처).
+BLOG_CONTENT_HOSTS: frozenset[str] = frozenset(
+    {h.lower() for h in ({BLOG_HOST} | set(MULTILANG_BLOG_HOSTS.values()))}
+    | {"storage.ghost.io"}
+)
 
 # ── ROOT_DIR 기반 경로 파생 ───────────────────────────────────────────────
 IMAGES_DIR = ROOT_DIR / "images"

@@ -13,6 +13,7 @@ from utils import ROOT_DIR
 from .constants import DOWNLOADABLE_EXTS, IMAGE_OVERRIDES, KAKAO_PF_PROFILE
 from .fetch import (
     _fetch_image,
+    _fetch_image_dualhost,
     _fetch_wayback_gdrive_from_post,
     _fetch_wayback_image,
     _fetch_wayback_img_from_post,
@@ -213,6 +214,8 @@ def download_one_image(
     if utype in ("img", "og_image"):
         payload = _fetch_image(img_url)
         if payload is None:
+            payload = _fetch_image_dualhost(img_url)
+        if payload is None:
             payload = _fetch_wayback_image(img_url)
         if payload is None:
             payload = _fetch_wayback_img_from_post(post_url, img_url, post_soup_cache)
@@ -227,6 +230,8 @@ def download_one_image(
     elif utype == "linked_keyword":
         payload = _fetch_image(img_url, allow_archive=True)
         if payload is None:
+            payload = _fetch_image_dualhost(img_url, allow_archive=True)
+        if payload is None:
             payload = _fetch_wayback_image(img_url, allow_archive=True)
         if payload is None:
             payload = _fetch_wayback_linked_from_post(post_url, img_url, post_soup_cache,
@@ -234,6 +239,8 @@ def download_one_image(
 
     elif utype == "linked_direct":
         payload = _fetch_image(img_url, allow_ext_fallback=True, allow_archive=True)
+        if payload is None:
+            payload = _fetch_image_dualhost(img_url, allow_ext_fallback=True, allow_archive=True)
         if payload is None and _is_community_cdn(img_url):
             payload = _fetch_wayback_image(img_url, allow_ext_fallback=True, allow_archive=True)
 

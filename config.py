@@ -108,6 +108,14 @@ for _lang, _lang_cfg in _multilang.items():
     MULTILANG_BLOG_HOSTS[_lang] = _lang_cfg["blog_host"]
     MULTILANG_EARLIEST_DATE[_lang] = _lang_cfg["earliest_date"]
 
+# 라이브 ghost host (현 ko primary + 다국어). cross-lang /content/ 이미지를 라이브로 복구할 때
+# swap 대상(소유 언어 ghost host 가 /content/… 를 자기 storage 로 301). 죽은 구도메인 대응.
+LIVE_BLOG_HOSTS: list[str] = [_urls["ghost_host"]]
+for _lang_cfg in _multilang.values():
+    _gh = _lang_cfg.get("ghost_host")
+    if _gh and _gh not in LIVE_BLOG_HOSTS:
+        LIVE_BLOG_HOSTS.append(_gh)
+
 # ── 이미지 오버라이드 ────────────────────────────────────────────────────
 IMAGE_OVERRIDES: dict[str, str] = _cfg.get("image_overrides", {})
 

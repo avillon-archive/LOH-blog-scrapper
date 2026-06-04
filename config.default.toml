@@ -20,6 +20,9 @@ max_retries = 3
 # ── URL / 도메인 ─────────────────────────────────────────────────────────
 [urls]
 blog_host = "blog-ko.lordofheroes.com"
+# ghost_host: 라이브 ghost.io host. 죽은 구도메인(blog-ko/…)·타 언어 storage 참조라도
+# 소유 언어 ghost host 가 /content/… 를 자기 storage 로 301 → cross-lang 이미지 라이브 복구.
+ghost_host = "loh-blog-ko.ghost.io"
 # blog_base, blog_image_prefix, sitemap URL 등은 blog_host 에서 자동 파생
 wayback_cdx_api = "https://web.archive.org/cdx/search/cdx"
 gdrive_hosts = ["drive.google.com", "docs.google.com"]  # *.googleusercontent.com 은 자동 인식
@@ -37,10 +40,12 @@ title_similarity_threshold = 0.55
 
 [urls.multilang.en]
 blog_host = "blog-en.lordofheroes.com"
+ghost_host = "lordofheroes-blog-en.ghost.io"
 earliest_date = "2020-10-20"
 
 [urls.multilang.ja]
 blog_host = "blog-ja.lordofheroes.com"
+ghost_host = "lordofheroes-blog-ja.ghost.io"
 earliest_date = "2021-01-15"
 
 # ── 카테고리 ──────────────────────────────────────────────────────────────
