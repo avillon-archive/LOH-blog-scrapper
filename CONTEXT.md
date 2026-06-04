@@ -1,6 +1,6 @@
 # 로드 오브 히어로즈 블로그 스크래퍼
 
-`blog-ko.lordofheroes.com` 전체 포스트(~2,200개)의 이미지·MD·HTML을 로컬에 저장하는 Python 스크래퍼.
+`blog-ko.lordofheroes.com` 전체 포스트(~2,200개)의 이미지·MD·HTML을 로컬에 저장하는 Python 스크래퍼. multilang(EN/JA) 사이트맵 + kakao PF 이미지 폴백(`--retry-fallback`)을 포함한다.
 
 > 모듈별 상세: [CONTEXT_UTILS.md](CONTEXT_UTILS.md) · [CONTEXT_LOG.md](CONTEXT_LOG.md) · [CONTEXT_IMAGES.md](CONTEXT_IMAGES.md) · [CONTEXT_MEDIA.md](CONTEXT_MEDIA.md) · [CONTEXT_RUN.md](CONTEXT_RUN.md) · [CONTEXT_HTML_LOCAL.md](CONTEXT_HTML_LOCAL.md)
 
